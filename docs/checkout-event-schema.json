@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ice-Stream Checkout Event",
+  "description": "Schema for checkout events processed by the Ice-Stream pipeline",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "user_id",
+    "amount",
+    "currency"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique identifier for the checkout event"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp when the checkout occurred"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Identifier of the customer"
+    },
+    "amount": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Checkout amount"
+    },
+    "currency": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 3,
+      "description": "Three-letter ISO currency code"
+    }
+  }
+}

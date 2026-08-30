@@ -128,7 +128,7 @@ Ice-Stream solves this by monitoring the data **while it is moving through the p
                          │ Alerts               │
                          │ Event Statistics     │
                          └──────────────────────┘
-Complete Data Flow
+ # Complete Data Flow
 
 The final system will work as follows:
 
@@ -158,25 +158,32 @@ The final system will work as follows:
        ↓
 13. React Dashboard
 🧩 Technologies Used
+
+
 Backend / Data Engineering
-Technology	Purpose
-Python	Producer, validation and backend logic
-Apache Kafka	Real-time event streaming
-Apache Flink	Real-time stream processing
-Apache Iceberg	Lakehouse table format
-MinIO	Local S3-compatible object storage
-FastAPI	Backend API and alert server
-WebSockets	Real-time dashboard communication
+
+Technology                	Purpose
+Python	Producer,     validation and backend logic
+Apache Kafka	        Real-time event streaming
+Apache Flink	        Real-time stream processing
+Apache Iceberg       	Lakehouse table format
+MinIO	                Local S3-compatible object storage
+FastAPI             	Backend API and alert server
+WebSockets          	Real-time dashboard communication
+
 Frontend
-Technology	Purpose
-React	Dashboard UI
-Vite	React development/build tool
-React Flow	Pipeline visualization
-JavaScript	Frontend logic
+
+Technology	         Purpose
+React	            Dashboard UI
+Vite	            React development/build tool
+React Flow       	Pipeline visualization
+JavaScript       	Frontend logic
+
 Development
-Technology	Purpose
-Docker	Run infrastructure locally
-Docker Compose	Manage multiple services
-Git	Version control
-GitHub	Collaboration and source control
-Pytest	Backend/quality testing
+
+Technology	                Purpose
+Docker               	Run infrastructure locally
+Docker Compose  	     Manage multiple services
+Git	                   Version control
+GitHub	               Collaboration and source control
+Pytest	               Backend/quality testing

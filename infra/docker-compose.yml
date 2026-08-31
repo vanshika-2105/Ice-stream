@@ -13,13 +13,13 @@ services:
 
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
 
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
 
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
 
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
 
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -57,3 +57,35 @@ services:
 
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
+
+  flink-jobmanager:
+    image: flink:1.20.1-scala_2.12-java17
+    container_name: ice-stream-flink-jobmanager
+
+    ports:
+      - "8081:8081"
+
+    command: jobmanager
+
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+
+    depends_on:
+      - kafka
+
+  flink-taskmanager:
+    image: flink:1.20.1-scala_2.12-java17
+    container_name: ice-stream-flink-taskmanager
+
+    command: taskmanager
+
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+
+    depends_on:
+      - flink-jobmanager

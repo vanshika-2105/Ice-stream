@@ -40,24 +40,31 @@ def validate_checkout_event(event: dict) -> dict:
     Returns:
         {
             "valid": bool,
+            "event_id": str | None,
             "errors": list[dict]
         }
     """
 
     errors = []
 
-    # Make sure the input is a dictionary
+    # --------------------------------------------------
+    # 0. Input type
+    # --------------------------------------------------
+
     if not isinstance(event, dict):
         return {
             "valid": False,
+            "event_id": None,
             "errors": [
                 _error(
                     "event",
                     "INVALID_TYPE",
-                    "Checkout event must be an object"
+                    "Checkout event must be an object",
                 )
             ],
         }
+
+    event_id = event.get("event_id")
 
     # --------------------------------------------------
     # 1. Required fields
@@ -69,17 +76,9 @@ def validate_checkout_event(event: dict) -> dict:
                 _error(
                     field,
                     "REQUIRED_FIELD",
-                    f"{field} is required"
+                    f"{field} is required",
                 )
             )
-
-    # Stop field-specific validation when fields are missing.
-    # This avoids duplicate/confusing errors.
-    if errors:
-        return {
-            "valid": False,
-            "errors": errors,
-        }
 
     # --------------------------------------------------
     # 2. String type rules
@@ -96,100 +95,99 @@ def validate_checkout_event(event: dict) -> dict:
     ]
 
     for field in string_fields:
-        if not isinstance(event[field], str):
+        if field in event and not isinstance(event[field], str):
             errors.append(
                 _error(
                     field,
                     "INVALID_TYPE",
-                    f"{field} must be a string"
+                    f"{field} must be a string",
                 )
             )
 
     # --------------------------------------------------
-    # 3. Quantity type rule
+    # 3. Quantity rules
     # --------------------------------------------------
 
-    quantity = event["quantity"]
+    if "quantity" in event:
+        quantity = event["quantity"]
 
-    # bool is technically a subclass of int in Python,
-    # so explicitly reject it.
-    if isinstance(quantity, bool) or not isinstance(quantity, int):
-        errors.append(
-            _error(
-                "quantity",
-                "INVALID_TYPE",
-                "Quantity must be an integer"
+        if isinstance(quantity, bool) or not isinstance(quantity, int):
+            errors.append(
+                _error(
+                    "quantity",
+                    "INVALID_TYPE",
+                    "Quantity must be an integer",
+                )
             )
-        )
-    elif quantity <= 0:
-        errors.append(
-            _error(
-                "quantity",
-                "NON_POSITIVE_VALUE",
-                "Quantity must be greater than 0"
+        elif quantity <= 0:
+            errors.append(
+                _error(
+                    "quantity",
+                    "NON_POSITIVE_VALUE",
+                    "Quantity must be greater than 0",
+                )
             )
-        )
 
     # --------------------------------------------------
-    # 4. Amount type and business rules
+    # 4. Amount rules
     # --------------------------------------------------
 
-    amount = event["amount"]
+    if "amount" in event:
+        amount = event["amount"]
 
-    if isinstance(amount, bool) or not isinstance(amount, Real):
-        errors.append(
-            _error(
-                "amount",
-                "INVALID_TYPE",
-                "Amount must be a number"
+        if isinstance(amount, bool) or not isinstance(amount, Real):
+            errors.append(
+                _error(
+                    "amount",
+                    "INVALID_TYPE",
+                    "Amount must be a number",
+                )
             )
-        )
-    elif amount < 0:
-        errors.append(
-            _error(
-                "amount",
-                "NEGATIVE_VALUE",
-                "Amount cannot be negative"
+        elif amount < 0:
+            errors.append(
+                _error(
+                    "amount",
+                    "NEGATIVE_VALUE",
+                    "Amount cannot be negative",
+                )
             )
-        )
 
     # --------------------------------------------------
-    # 5. Event type
+    # 5. Event type rules
     # --------------------------------------------------
 
-    if isinstance(event["event_type"], str):
+    if "event_type" in event and isinstance(event["event_type"], str):
         if event["event_type"] not in ALLOWED_EVENT_TYPES:
             errors.append(
                 _error(
                     "event_type",
                     "INVALID_EVENT_TYPE",
-                    "Event type must be 'checkout'"
+                    "Event type must be 'checkout'",
                 )
             )
 
     # --------------------------------------------------
-    # 6. Currency
+    # 6. Currency rules
     # --------------------------------------------------
 
-    if isinstance(event["currency"], str):
+    if "currency" in event and isinstance(event["currency"], str):
         if event["currency"] not in ALLOWED_CURRENCIES:
             errors.append(
                 _error(
                     "currency",
                     "INVALID_CURRENCY",
-                    "Currency must be one of INR, USD, EUR, or GBP"
+                    "Currency must be one of INR, USD, EUR, or GBP",
                 )
             )
 
     # --------------------------------------------------
-    # 7. Timestamp
+    # 7. Timestamp rules
     # --------------------------------------------------
 
-    timestamp = event["timestamp"]
+    if "timestamp" in event and isinstance(event["timestamp"], str):
+        timestamp = event["timestamp"]
 
-    if isinstance(timestamp, str):
         try:
-            # Support the common UTC "Z" format.
             datetime.fromisoformat(
                 timestamp.replace("Z", "+00:00")
             )
@@ -198,11 +196,16 @@ def validate_checkout_event(event: dict) -> dict:
                 _error(
                     "timestamp",
                     "INVALID_TIMESTAMP",
-                    "Timestamp must be a valid ISO-8601 datetime"
+                    "Timestamp must be a valid ISO-8601 datetime",
                 )
             )
 
+    # --------------------------------------------------
+    # 8. Final validation result
+    # --------------------------------------------------
+
     return {
         "valid": len(errors) == 0,
+        "event_id": event_id if isinstance(event_id, str) else None,
         "errors": errors,
     }

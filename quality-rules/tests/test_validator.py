@@ -119,3 +119,24 @@ def test_invalid_event_type():
         and error["code"] == "INVALID_EVENT_TYPE"
         for error in result["errors"]
     )
+def test_multiple_validation_errors():
+    event = valid_event()
+
+    del event["customer_id"]
+    event["amount"] = -100
+    event["quantity"] = 0
+
+    result = validate_checkout_event(event)
+
+    assert result["valid"] is False
+
+    assert len(result["errors"]) == 3
+
+    error_fields = {
+        error["field"]
+        for error in result["errors"]
+    }
+
+    assert "customer_id" in error_fields
+    assert "amount" in error_fields
+    assert "quantity" in error_fields

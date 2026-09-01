@@ -1,11 +1,11 @@
   import Header from "./components/Header";
 import Pipeline from "./components/Pipeline";
 import StatusCard from "./components/StatusCard";
+import AlertPanel from "./components/AlertPanel";
 import useWebSocket from "./hooks/useWebSocket";
-import "./App.css";
 
 function App() {
-  const { status, message } = useWebSocket(
+  const { status, latestMessage } = useWebSocket(
     "ws://localhost:8000/ws"
   );
 
@@ -28,17 +28,19 @@ function App() {
 
           <h3>Latest Backend Message</h3>
 
-          {message ? (
+          {latestMessage ? (
             <pre>
-              {typeof message === "string"
-                ? message
-                : JSON.stringify(message, null, 2)}
+              {typeof latestMessage === "string"
+                ? latestMessage
+                : JSON.stringify(latestMessage, null, 2)}
             </pre>
           ) : (
             <p>No message received yet.</p>
           )}
         </section>
       </section>
+
+      <AlertPanel alert={latestMessage} />
     </main>
   );
 }

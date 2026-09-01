@@ -1,59 +1,35 @@
-import { ReactFlow, Background, Controls } from "@xyflow/react";
+  import { ReactFlow, Background, Controls } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 const nodes = [
   {
-    id: "kafka",
-    position: { x: 50, y: 150 },
-    data: {
-      label: (
-        <div>
-          <strong>Kafka</strong>
-          <br />
-          <span>Ingest</span>
-        </div>
-      ),
-    },
+    id: "1",
+    position: { x: 50, y: 100 },
+    data: { label: "Kafka\nIngest" },
   },
   {
-    id: "flink",
-    position: { x: 350, y: 150 },
-    data: {
-      label: (
-        <div>
-          <strong>Flink</strong>
-          <br />
-          <span>Process</span>
-        </div>
-      ),
-    },
+    id: "2",
+    position: { x: 300, y: 100 },
+    data: { label: "Flink\nProcess" },
   },
   {
-    id: "iceberg",
-    position: { x: 650, y: 150 },
-    data: {
-      label: (
-        <div>
-          <strong>Iceberg</strong>
-          <br />
-          <span>Serve</span>
-        </div>
-      ),
-    },
+    id: "3",
+    position: { x: 550, y: 100 },
+    data: { label: "Iceberg\nServe" },
   },
 ];
 
 const edges = [
   {
-    id: "kafka-flink",
-    source: "kafka",
-    target: "flink",
+    id: "e1-2",
+    source: "1",
+    target: "2",
     animated: true,
   },
   {
-    id: "flink-iceberg",
-    source: "flink",
-    target: "iceberg",
+    id: "e2-3",
+    source: "2",
+    target: "3",
     animated: true,
   },
 ];
@@ -64,14 +40,7 @@ function Pipeline() {
       <h2>Data Pipeline</h2>
 
       <div className="pipeline-container">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          fitView
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={false}
-        >
+        <ReactFlow nodes={nodes} edges={edges} fitView>
           <Background />
           <Controls />
         </ReactFlow>

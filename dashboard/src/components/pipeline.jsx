@@ -1,7 +1,7 @@
   import { ReactFlow, Background, Controls } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-const nodes = [
+const nodes= [
   {
     id: "1",
     position: { x: 50, y: 100 },

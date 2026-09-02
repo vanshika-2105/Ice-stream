@@ -1,24 +1,18 @@
-function AlertPanel({ alert }) {
+ function AlertPanel({ alert }) {
   return (
     <section className="alert-panel">
-      <h2>🚨 Latest Alert</h2>
+      <h2>🚨 Alerts</h2>
 
       {!alert ? (
-        <p>No alerts received yet.</p>
+        <p>No active critical alerts</p>
       ) : (
         <div className="alert-content">
-          <h3>{alert.type}</h3>
+          <h3>⚠ {alert.severity}</h3>
+
+          <p>{alert.message}</p>
 
           <p>
-            <strong>Event:</strong> {alert.event_id}
-          </p>
-
-          <p>
-            <strong>Severity:</strong> {alert.severity}
-          </p>
-
-          <p>
-            <strong>Message:</strong> {alert.message}
+            Quality Score: {alert.quality_score}%
           </p>
         </div>
       )}

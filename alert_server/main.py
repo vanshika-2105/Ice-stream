@@ -1,9 +1,12 @@
 from datetime import datetime, timezone
-
+import sys
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quality-rules"))
 from alert_server.alert_manager import AlertManager
-
+from metrics import QualityMetrics
+from validator import validate_checkout_event
+from thresholds import get_quality_severity
 
 app = FastAPI(
     title="Ice-Stream Alert Server",
@@ -12,7 +15,7 @@ app = FastAPI(
 )
 
 alert_manager = AlertManager()
-
+quality_metrics = QualityMetrics()
 
 @app.get("/health")
 def health_check():
@@ -27,7 +30,58 @@ def root():
     return {
         "message": "Ice-Stream Alert Server is running"
     }
+@app.get("/metrics")
+def get_metrics():
+    """Return current data-quality metrics."""
+    return quality_metrics.get_metrics()
+@app.get("/alerts")
+def get_alerts():
+    """Return the current quality alert status."""
 
+    metrics = quality_metrics.get_metrics()
+    severity = get_quality_severity(metrics["quality_score"])
+
+    if severity is None:
+        return {
+            "alert": False,
+            "severity": None,
+            "quality_score": metrics["quality_score"],
+        }
+
+    return {
+        "alert": True,
+        "severity": severity,
+        "quality_score": metrics["quality_score"],
+        "message": "Data quality dropped below threshold",
+    }
+@app.post("/events")
+async def process_event(event: dict):
+    """Validate an event, update metrics, and generate quality alerts."""
+
+    result = validate_checkout_event(event)
+
+    if result["valid"]:
+        quality_metrics.record_valid()
+    else:
+        quality_metrics.record_invalid(result["errors"])
+
+    metrics = quality_metrics.get_metrics()
+
+    # Check whether the current quality score breaches a threshold.
+    severity = get_quality_severity(metrics["quality_score"])
+
+    if severity:
+        alert = {
+            "type": "QUALITY_ALERT",
+            "severity": severity,
+            "quality_score": metrics["quality_score"],
+            "message": "Data quality dropped below threshold",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        await alert_manager.broadcast(alert)
+
+    return result
 
 @app.websocket("/ws/alerts")
 async def websocket_alerts(websocket: WebSocket):

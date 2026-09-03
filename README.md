@@ -1,10 +1,10 @@
-# 🚀 Ice-Stream — Real-Time Data Quality & Lakehouse Observability Platform
+#  Ice-Stream — Real-Time Data Quality & Lakehouse Observability Platform
 
 > A real-time streaming data pipeline that detects data-quality issues, processes checkout events, stores reliable data in an Apache Iceberg lakehouse, and provides a live monitoring dashboard.
 
 ---
 
-## 📌 Project Overview
+##  Project Overview
 
 **Ice-Stream** is a real-time data engineering and observability platform designed to monitor the quality and health of a streaming data pipeline.
 
@@ -29,7 +29,7 @@ The complete project will be developed over **20 days** by a team of three membe
 
 ---
 
-# 🎯 Project Objective
+#  Project Objective
 
 The primary objective is to build a complete real-time data pipeline with built-in data-quality monitoring.
 
@@ -48,7 +48,7 @@ The final system should allow a user to open a dashboard and see:
 
 ---
 
-# 🧠 Problem Statement
+#  Problem Statement
 
 Modern applications generate huge amounts of streaming data.
 
@@ -70,7 +70,7 @@ Ice-Stream solves this by monitoring the data **while it is moving through the p
 
 ---
 
-# 🏗️ High-Level Architecture
+#  High-Level Architecture
 
 ```text
                          ┌──────────────────────┐
@@ -157,7 +157,7 @@ The final system will work as follows:
 12. WebSocket
        ↓
 13. React Dashboard
-🧩 Technologies Used
+ Technologies Used
 
 
 Backend / Data Engineering

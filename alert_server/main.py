@@ -56,7 +56,7 @@ def get_alerts():
     }
 @app.post("/events")
 async def process_event(event: dict):
-    """Validate an event, update metrics, and generate quality alerts."""
+    """Validate an event, update metrics, broadcast metrics, and generate quality alerts."""
 
     result = validate_checkout_event(event)
 
@@ -66,6 +66,17 @@ async def process_event(event: dict):
         quality_metrics.record_invalid(result["errors"])
 
     metrics = quality_metrics.get_metrics()
+
+    # Broadcast current quality metrics to connected WebSocket clients.
+    metrics_message = {
+        "type": "QUALITY_METRICS",
+        "total_events": metrics["total_events"],
+        "valid_events": metrics["valid_events"],
+        "invalid_events": metrics["invalid_events"],
+        "quality_score": metrics["quality_score"],
+    }
+
+    await alert_manager.broadcast(metrics_message)
 
     # Check whether the current quality score breaches a threshold.
     severity = get_quality_severity(metrics["quality_score"])
@@ -82,7 +93,6 @@ async def process_event(event: dict):
         await alert_manager.broadcast(alert)
 
     return result
-
 @app.websocket("/ws/alerts")
 async def websocket_alerts(websocket: WebSocket):
     """WebSocket endpoint for real-time data quality alerts."""

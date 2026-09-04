@@ -1,0 +1,88 @@
+ .pipeline-container {
+  height: 400px;
+  border: 1px solid #444;
+  border-radius: 8px;
+}
+
+.alert-panel {
+  margin-top: 20px;
+  padding: 20px;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.alert-content {
+  padding: 15px;
+  border-left: 5px solid red;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+}
+
+.app {
+  min-height: 100vh;
+  padding: 30px;
+  background: #f5f7fb;
+}
+
+.header {
+  margin-bottom: 30px;
+}
+
+.header h1 {
+  margin: 0;
+}
+
+.header p {
+  color: #666;
+}
+
+.pipeline-section {
+  background: white;
+  padding: 20px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+}
+
+.pipeline-container {
+  height: 400px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.status-card,
+.websocket-card {
+  background: white;
+  padding: 20px;
+  border-radius: 10px;
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid #eee;
+}
+
+pre {
+  padding: 15px;
+  background: #f4f4f4;
+  overflow-x: auto;
+}

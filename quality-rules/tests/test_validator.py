@@ -140,3 +140,15 @@ def test_multiple_validation_errors():
     assert "customer_id" in error_fields
     assert "amount" in error_fields
     assert "quantity" in error_fields
+    def test_negative_quantity():
+     event = valid_event()
+    event["quantity"] = -1
+
+    result = validate_checkout_event(event)
+
+    assert result["valid"] is False
+    assert any(
+        error["field"] == "quantity"
+        and error["code"] == "NON_POSITIVE_VALUE"
+        for error in result["errors"]
+    )

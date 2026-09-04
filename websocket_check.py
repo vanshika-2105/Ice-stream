@@ -8,10 +8,11 @@ async def test_websocket():
     async with websockets.connect(uri) as websocket:
         print("Connected to Alert Server")
 
-        message = await websocket.recv()
+        for _ in range(2):
+            message = await websocket.recv()
 
-        print("Received alert:")
-        print(message)
+            print("Received WebSocket message:")
+            print(message)
 
 
 if __name__ == "__main__":

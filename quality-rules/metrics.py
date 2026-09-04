@@ -34,12 +34,26 @@ class QualityMetrics:
 
         return (self.valid_events / self.total_events) * 100
 
+    @property
+    def invalid_event_rate(self):
+        """Return the invalid event rate as a percentage."""
+        if self.total_events == 0:
+            return 0.0
+
+        return (self.invalid_events / self.total_events) * 100
+
     def get_metrics(self):
         """Return metrics in a dashboard-friendly format."""
+        error_counts = dict(self.error_counts)
+
         return {
             "total_events": self.total_events,
             "valid_events": self.valid_events,
             "invalid_events": self.invalid_events,
             "quality_score": round(self.quality_score, 2),
-            "errors": dict(self.error_counts),
+            "invalid_event_rate": round(self.invalid_event_rate, 2),
+            "error_counts": error_counts,
+
+            # Backward compatibility with Day 6 API/tests
+            "errors": error_counts,
         }

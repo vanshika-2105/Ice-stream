@@ -19,7 +19,7 @@ producer = KafkaProducer(
 
 
 def generate_checkout_event(event_number):
-    """Generate one checkout event following Schema v1."""
+    """Generate a checkout event that is valid or intentionally invalid."""
 
     event = {
         "event_id": f"evt_{event_number:03d}",
@@ -33,7 +33,30 @@ def generate_checkout_event(event_number):
         "currency": "INR"
     }
 
-    return event
+    # Approximately 10% of events are intentionally invalid.
+    if event_number % 10 == 0:
+        invalid_type = random.choice([
+            "missing_customer",
+            "zero_quantity",
+            "negative_amount",
+            "invalid_currency"
+        ])
+
+        if invalid_type == "missing_customer":
+            del event["customer_id"]
+
+        elif invalid_type == "zero_quantity":
+            event["quantity"] = 0
+
+        elif invalid_type == "negative_amount":
+            event["amount"] = -100.00
+
+        elif invalid_type == "invalid_currency":
+            event["currency"] = "XYZ"
+
+        return event, False, invalid_type
+
+    return event, True, None
 
 
 def main():
@@ -42,17 +65,25 @@ def main():
     print("Starting Ice-Stream Kafka Producer...")
     print(f"Kafka broker: {KAFKA_BROKER}")
     print(f"Topic: {TOPIC}")
+    print("Target distribution: approximately 90% valid / 10% invalid")
     print("Sending one checkout event every second...")
     print("Press Ctrl+C to stop.\n")
 
     try:
         while True:
-            event = generate_checkout_event(event_number)
+            event, is_valid, invalid_type = generate_checkout_event(event_number)
 
             producer.send(TOPIC, value=event)
             producer.flush()
 
-            print(f"Sent event: {event['event_id']}")
+            if is_valid:
+                print(f"[VALID] Sent event: {event['event_id']}")
+            else:
+                print(
+                    f"[INVALID] Sent event: {event['event_id']} "
+                    f"(reason: {invalid_type})"
+                )
+
             print(json.dumps(event, indent=2))
             print("-" * 50)
 

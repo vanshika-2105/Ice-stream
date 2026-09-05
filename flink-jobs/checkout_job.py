@@ -2,8 +2,8 @@ from pyflink.table import EnvironmentSettings, TableEnvironment
 
 
 KAFKA_BOOTSTRAP_SERVERS = "kafka:29092"
-KAFKA_TOPIC = "checkout-events"
-KAFKA_GROUP_ID = "ice-stream-checkout"
+KAFKA_TOPIC = "checkout-events-valid"
+KAFKA_GROUP_ID = "ice-stream-valid-events"
 
 ICEBERG_CATALOG = "iceberg_catalog"
 ICEBERG_DATABASE = "checkout"
@@ -53,6 +53,7 @@ def main():
 
     # ---------------------------------------------------------
     # 3. Create Kafka source table
+    #    Flink now reads ONLY validated events
     # ---------------------------------------------------------
     table_env.execute_sql(
         f"""
@@ -102,7 +103,7 @@ def main():
     )
 
     # ---------------------------------------------------------
-    # 5. Kafka -> Flink transformation -> Iceberg
+    # 5. Valid Kafka events -> Flink transformation -> Iceberg
     # ---------------------------------------------------------
     result = table_env.execute_sql(
         f"""

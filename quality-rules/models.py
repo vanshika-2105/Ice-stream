@@ -1,5 +1,26 @@
+from dataclasses import dataclass, field
 from datetime import datetime
 from numbers import Real
+from typing import Any
+
+
+@dataclass
+class InvalidEvent:
+    """Represent an event that failed quality validation."""
+
+    event_id: str | None
+    original_event: dict[str, Any]
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    failed_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
+class ErrorSummary:
+    """Summarize validation errors for an invalid event."""
+
+    event_id: str | None
+    number_of_errors: int
+    error_codes: list[str]
 
 
 REQUIRED_FIELDS = [
@@ -31,6 +52,23 @@ def _error(field: str, code: str, message: str) -> dict:
         "code": code,
         "message": message,
     }
+
+
+def create_error_summary(
+    event_id: str | None,
+    errors: list[dict],
+) -> ErrorSummary:
+    """Create a compact error summary for an invalid event."""
+
+    return ErrorSummary(
+        event_id=event_id,
+        number_of_errors=len(errors),
+        error_codes=[
+            error["code"]
+            for error in errors
+            if "code" in error
+        ],
+    )
 
 
 def validate_checkout_event(event: dict) -> dict:

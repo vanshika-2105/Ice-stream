@@ -1,12 +1,21 @@
 from datetime import datetime, timezone
 import sys
 from pathlib import Path
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quality-rules"))
+
+# Add quality-rules to Python path
+sys.path.insert(
+    0,
+    str(Path(__file__).resolve().parent.parent / "quality-rules")
+)
+
 from alert_server.alert_manager import AlertManager
 from metrics import QualityMetrics
+from models import InvalidEvent
 from validator import validate_checkout_event
 from thresholds import get_quality_severity
+
 
 app = FastAPI(
     title="Ice-Stream Alert Server",
@@ -16,6 +25,7 @@ app = FastAPI(
 
 alert_manager = AlertManager()
 quality_metrics = QualityMetrics()
+
 
 @app.get("/health")
 def health_check():
@@ -30,10 +40,14 @@ def root():
     return {
         "message": "Ice-Stream Alert Server is running"
     }
+
+
 @app.get("/metrics")
 def get_metrics():
     """Return current data-quality metrics."""
     return quality_metrics.get_metrics()
+
+
 @app.get("/alerts")
 def get_alerts():
     """Return the current quality alert status."""
@@ -54,6 +68,8 @@ def get_alerts():
         "quality_score": metrics["quality_score"],
         "message": "Data quality dropped below threshold",
     }
+
+
 @app.post("/events")
 async def process_event(event: dict):
     """Validate an event, update metrics, broadcast metrics, and generate quality alerts."""
@@ -65,6 +81,13 @@ async def process_event(event: dict):
     else:
         quality_metrics.record_invalid(result["errors"])
 
+        # Create structured representation of the invalid event.
+        invalid_event = InvalidEvent(
+            event_id=result["event_id"],
+            original_event=event,
+            errors=result["errors"],
+        )
+
     metrics = quality_metrics.get_metrics()
 
     # Broadcast current quality metrics to connected WebSocket clients.
@@ -74,6 +97,8 @@ async def process_event(event: dict):
         "valid_events": metrics["valid_events"],
         "invalid_events": metrics["invalid_events"],
         "quality_score": metrics["quality_score"],
+        "invalid_event_rate": metrics["invalid_event_rate"],
+        "error_counts": metrics["error_counts"],
     }
 
     await alert_manager.broadcast(metrics_message)
@@ -93,6 +118,8 @@ async def process_event(event: dict):
         await alert_manager.broadcast(alert)
 
     return result
+
+
 @app.websocket("/ws/alerts")
 async def websocket_alerts(websocket: WebSocket):
     """WebSocket endpoint for real-time data quality alerts."""

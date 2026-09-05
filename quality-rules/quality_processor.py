@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import datetime, timezone
 
 from kafka import KafkaConsumer, KafkaProducer
 
@@ -12,12 +13,12 @@ KAFKA_BROKER = "localhost:9092"
 
 INPUT_TOPIC = "checkout-events"
 VALID_TOPIC = "checkout-events-valid"
-INVALID_TOPIC = "checkout-events-invalid"
+DLQ_TOPIC = "checkout-events-dlq"
 
 CONSUMER_GROUP = "ice-stream-quality-engine"
 
 
-# Read the raw Kafka message first.
+# Read raw Kafka messages first.
 # JSON parsing is handled manually so malformed JSON can be caught.
 consumer = KafkaConsumer(
     INPUT_TOPIC,
@@ -28,10 +29,21 @@ consumer = KafkaConsumer(
     value_deserializer=lambda value: value.decode("utf-8"),
 )
 
+
 producer = KafkaProducer(
     bootstrap_servers=KAFKA_BROKER,
     value_serializer=lambda value: json.dumps(value).encode("utf-8"),
 )
+
+
+def current_timestamp():
+    """Return the current UTC timestamp in ISO-8601 format."""
+
+    return (
+        datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def process_event(event):
@@ -51,24 +63,25 @@ def process_event(event):
         )
         producer.flush()
 
-        print(f"[INFO] Event {event_id} → VALID")
+        print(f"[INFO] Event {event_id} -> VALID")
 
     else:
 
         invalid_event = {
-            **event,
-            "quality_status": "INVALID",
-            "quality_errors": decision["quality_errors"],
+            "event_id": event_id,
+            "original_event": event,
+            "errors": decision["quality_errors"],
+            "failed_at": current_timestamp(),
         }
 
         producer.send(
-            INVALID_TOPIC,
+            DLQ_TOPIC,
             value=invalid_event
         )
         producer.flush()
 
         print(
-            f"[ERROR] Event {event_id} → INVALID "
+            f"[ERROR] Event {event_id} -> DLQ "
             f"({len(decision['quality_errors'])} error(s))"
         )
 
@@ -78,7 +91,7 @@ def main():
     print("Starting Ice-Stream Quality Engine...")
     print(f"Input topic: {INPUT_TOPIC}")
     print(f"Valid topic: {VALID_TOPIC}")
-    print(f"Invalid topic: {INVALID_TOPIC}")
+    print(f"DLQ topic: {DLQ_TOPIC}")
     print("Waiting for events...\n")
 
     try:
@@ -100,21 +113,21 @@ def main():
                     f"offset {message.offset}: {error}"
                 )
 
-                # Record the malformed event as an invalid quality record.
+                # Preserve the malformed raw payload in the DLQ record.
                 invalid_event = {
                     "event_id": None,
-                    "quality_status": "INVALID",
-                    "quality_errors": [
+                    "original_event": message.value,
+                    "errors": [
                         {
-                            "field": "event",
                             "code": "MALFORMED_JSON",
                             "message": "Event payload is not valid JSON",
                         }
                     ],
+                    "failed_at": current_timestamp(),
                 }
 
                 producer.send(
-                    INVALID_TOPIC,
+                    DLQ_TOPIC,
                     value=invalid_event
                 )
                 producer.flush()

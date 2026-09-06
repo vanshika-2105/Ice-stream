@@ -1,22 +1,10 @@
-function MetricsCard({ total, valid, invalid }) {
+function InvalidEventRate({ rate = 0 }) {
   return (
-    <section className="metrics-grid">
-      <div className="metric-card">
-        <h3>Total Events</h3>
-        <p>{total}</p>
-      </div>
-
-      <div className="metric-card">
-        <h3>Valid Events</h3>
-        <p>{valid}</p>
-      </div>
-
-      <div className="metric-card">
-        <h3>Invalid Events</h3>
-        <p>{invalid}</p>
-      </div>
+    <section className="invalid-rate-card">
+      <h2>Invalid Event Rate</h2>
+      <p>{rate}%</p>
     </section>
   );
 }
 
-export default MetricsCard;
+export default InvalidEventRate;

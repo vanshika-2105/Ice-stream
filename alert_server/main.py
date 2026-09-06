@@ -1,8 +1,6 @@
-from datetime import datetime, timezone
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import sys
 from pathlib import Path
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 # Add quality-rules to Python path
 sys.path.insert(
@@ -11,24 +9,25 @@ sys.path.insert(
 )
 
 from alert_server.alert_manager import AlertManager
+from alerts import AlertEngine
 from metrics import QualityMetrics
-from models import InvalidEvent
 from validator import validate_checkout_event
-from thresholds import get_quality_severity
 
 
 app = FastAPI(
     title="Ice-Stream Alert Server",
     description="Backend service for streaming data quality alerts",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 alert_manager = AlertManager()
 quality_metrics = QualityMetrics()
+alert_engine = AlertEngine()
 
 
 @app.get("/health")
 def health_check():
+    """Check whether the backend service is running."""
     return {
         "status": "healthy",
         "service": "alert-server"
@@ -44,35 +43,50 @@ def root():
 
 @app.get("/metrics")
 def get_metrics():
-    """Return current data-quality metrics."""
-    return quality_metrics.get_metrics()
+    """Return current data-quality metrics with current status."""
+
+    metrics = quality_metrics.get_metrics()
+
+    return {
+        **metrics,
+        "status": alert_engine.get_status(metrics["quality_score"]),
+    }
 
 
 @app.get("/alerts")
 def get_alerts():
-    """Return the current quality alert status."""
+    """Return the current data-quality alert state."""
 
     metrics = quality_metrics.get_metrics()
-    severity = get_quality_severity(metrics["quality_score"])
+    status = alert_engine.get_status(metrics["quality_score"])
 
-    if severity is None:
+    if status == "HEALTHY":
         return {
             "alert": False,
             "severity": None,
+            "status": "HEALTHY",
             "quality_score": metrics["quality_score"],
         }
 
     return {
         "alert": True,
-        "severity": severity,
+        "severity": status,
+        "status": status,
         "quality_score": metrics["quality_score"],
-        "message": "Data quality dropped below threshold",
+        "message": (
+            "Data quality entered warning range"
+            if status == "WARNING"
+            else "Data quality dropped below critical threshold"
+        ),
     }
 
 
 @app.post("/events")
 async def process_event(event: dict):
-    """Validate an event, update metrics, broadcast metrics, and generate quality alerts."""
+    """
+    Validate an event, update metrics, broadcast metrics,
+    and generate state-transition alerts.
+    """
 
     result = validate_checkout_event(event)
 
@@ -81,16 +95,11 @@ async def process_event(event: dict):
     else:
         quality_metrics.record_invalid(result["errors"])
 
-        # Create structured representation of the invalid event.
-        invalid_event = InvalidEvent(
-            event_id=result["event_id"],
-            original_event=event,
-            errors=result["errors"],
-        )
-
     metrics = quality_metrics.get_metrics()
 
-    # Broadcast current quality metrics to connected WebSocket clients.
+    status = alert_engine.get_status(metrics["quality_score"])
+
+    # Broadcast current metrics.
     metrics_message = {
         "type": "QUALITY_METRICS",
         "total_events": metrics["total_events"],
@@ -99,30 +108,30 @@ async def process_event(event: dict):
         "quality_score": metrics["quality_score"],
         "invalid_event_rate": metrics["invalid_event_rate"],
         "error_counts": metrics["error_counts"],
+        "status": status,
     }
 
     await alert_manager.broadcast(metrics_message)
 
-    # Check whether the current quality score breaches a threshold.
-    severity = get_quality_severity(metrics["quality_score"])
+    # Let AlertEngine decide whether a state-transition
+    # alert/recovery event should be generated.
+    alert = alert_engine.evaluate(
+        quality_score=metrics["quality_score"],
+        invalid_event_rate=metrics["invalid_event_rate"],
+    )
 
-    if severity:
-        alert = {
-            "type": "QUALITY_ALERT",
-            "severity": severity,
-            "quality_score": metrics["quality_score"],
-            "message": "Data quality dropped below threshold",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
+    if alert is not None:
+        await alert_manager.broadcast(alert.to_dict())
 
-        await alert_manager.broadcast(alert)
-
-    return result
+    return {
+        **result,
+        "status": status,
+    }
 
 
 @app.websocket("/ws/alerts")
 async def websocket_alerts(websocket: WebSocket):
-    """WebSocket endpoint for real-time data quality alerts."""
+    """WebSocket endpoint for real-time data-quality messages."""
 
     await alert_manager.connect(websocket)
 
@@ -139,14 +148,13 @@ async def websocket_alerts(websocket: WebSocket):
 
 @app.post("/alerts/test")
 async def send_test_alert():
-    """Send a fake data-quality alert to connected WebSocket clients."""
+    """Send a test alert to connected WebSocket clients."""
 
     alert = {
-        "type": "DATA_QUALITY_ERROR",
-        "event_id": "evt_test",
-        "severity": "ERROR",
-        "message": "Amount cannot be negative",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "type": "QUALITY_ALERT",
+        "severity": "CRITICAL",
+        "quality_score": 0.0,
+        "message": "Test data-quality alert",
     }
 
     await alert_manager.broadcast(alert)

@@ -1,10 +1,10 @@
- function QualityScore({ score }) {
-  let status = "HEALTHY";
+ function QualityScore({ score = 0 }) {
+  let status = "CRITICAL";
 
-  if (score < 95 && score >= 90) {
+  if (score >= 95) {
+    status = "HEALTHY";
+  } else if (score >= 90) {
     status = "WARNING";
-  } else if (score < 90) {
-    status = "CRITICAL";
   }
 
   return (
@@ -15,7 +15,9 @@
         {score}%
       </div>
 
-      <p>{status}</p>
+      <div className="quality-status">
+        Status: {status}
+      </div>
     </section>
   );
 }

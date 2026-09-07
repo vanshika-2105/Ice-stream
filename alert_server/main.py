@@ -1,4 +1,5 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from datetime import datetime, timezone
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 import sys
 from pathlib import Path
 
@@ -23,7 +24,11 @@ app = FastAPI(
 alert_manager = AlertManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
+# In-memory alert history.
+# This stores state-transition alerts and recovery events.
+alert_history = []
 
+MAX_ALERT_HISTORY = 100
 
 @app.get("/health")
 def health_check():
@@ -55,29 +60,24 @@ def get_metrics():
 
 @app.get("/alerts")
 def get_alerts():
-    """Return the current data-quality alert state."""
-
-    metrics = quality_metrics.get_metrics()
-    status = alert_engine.get_status(metrics["quality_score"])
-
-    if status == "HEALTHY":
-        return {
-            "alert": False,
-            "severity": None,
-            "status": "HEALTHY",
-            "quality_score": metrics["quality_score"],
-        }
+    """Return recent quality alert history."""
 
     return {
-        "alert": True,
-        "severity": status,
-        "status": status,
+        "alerts": alert_history
+    }
+@app.get("/quality/status")
+def get_quality_status():
+    """Return the current data-quality state and metrics."""
+
+    metrics = quality_metrics.get_metrics()
+
+    return {
+        "status": alert_engine.get_status(metrics["quality_score"]),
         "quality_score": metrics["quality_score"],
-        "message": (
-            "Data quality entered warning range"
-            if status == "WARNING"
-            else "Data quality dropped below critical threshold"
-        ),
+        "total_events": metrics["total_events"],
+        "valid_events": metrics["valid_events"],
+        "invalid_events": metrics["invalid_events"],
+        "invalid_event_rate": metrics["invalid_event_rate"],
     }
 
 
@@ -121,7 +121,20 @@ async def process_event(event: dict):
     )
 
     if alert is not None:
-        await alert_manager.broadcast(alert.to_dict())
+        alert_data = alert.to_dict()
+
+        # Add a unique history ID.
+        alert_data["id"] = f"alert-{len(alert_history) + 1:03d}"
+
+        # Store newest alert.
+        alert_history.append(alert_data)
+
+        # Keep only the most recent alerts.
+        if len(alert_history) > MAX_ALERT_HISTORY:
+            alert_history.pop(0)
+
+        # Broadcast the same alert to WebSocket clients.
+        await alert_manager.broadcast(alert_data)  
 
     return {
         **result,

@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 
 from alert_server.main import app
 
-
 client = TestClient(app)
 
 
@@ -13,8 +12,9 @@ def test_health_endpoint():
 
     data = response.json()
 
-    assert data["status"] == "healthy"
+    assert data["status"] == "ok"
     assert data["service"] == "alert-server"
+    assert "timestamp" in data
 
 
 def test_quality_status_endpoint():

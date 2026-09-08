@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import sys
 from pathlib import Path
 
@@ -10,10 +11,11 @@ sys.path.insert(
 )
 
 from alert_server.alert_manager import AlertManager
+from alert_server.system_alerts import SystemAlertEngine
+from alert_server.circuit_breaker import CircuitBreaker
 from alerts import AlertEngine
 from metrics import QualityMetrics
 from validator import validate_checkout_event
-
 
 app = FastAPI(
     title="Ice-Stream Alert Server",
@@ -21,9 +23,19 @@ app = FastAPI(
     version="0.3.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 alert_manager = AlertManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
+system_alert_engine = SystemAlertEngine()
+circuit_breaker = CircuitBreaker()
+
 # In-memory alert history.
 # This stores state-transition alerts and recovery events.
 alert_history = []
@@ -32,12 +44,22 @@ MAX_ALERT_HISTORY = 100
 
 @app.get("/health")
 def health_check():
-    """Check whether the backend service is running."""
+    """Liveness check: verify that the alert server process is running."""
     return {
-        "status": "healthy",
-        "service": "alert-server"
+        "status": "ok",
+        "service": "alert-server",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
+
+@app.get("/health/ready")
+def readiness_check():
+    """Readiness check: verify that the backend is ready to serve requests."""
+    return {
+        "status": "ready",
+        "service": "alert-server",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 @app.get("/")
 def root():
@@ -65,6 +87,8 @@ def get_alerts():
     return {
         "alerts": alert_history
     }
+
+
 @app.get("/quality/status")
 def get_quality_status():
     """Return the current data-quality state and metrics."""
@@ -78,6 +102,45 @@ def get_quality_status():
         "valid_events": metrics["valid_events"],
         "invalid_events": metrics["invalid_events"],
         "invalid_event_rate": metrics["invalid_event_rate"],
+    }
+
+
+@app.get("/system/status")
+def get_system_status():
+    """Return the current infrastructure system status."""
+
+    return system_alert_engine.get_system_status()
+@app.post("/system/components/{component}")
+async def update_system_component(component: str, payload: dict):
+    status = payload.get("status")
+
+    if status not in {"UP", "DOWN"}:
+        raise HTTPException(
+            status_code=400,
+            detail="status must be UP or DOWN",
+        )
+
+    alert = system_alert_engine.update_component(
+        component=component,
+        status=status,
+        message=payload.get("message"),
+    )
+
+    if alert is not None:
+        alert_data = alert.to_dict()
+        alert_data["id"] = f"system-alert-{len(alert_history) + 1:03d}"
+
+        alert_history.append(alert_data)
+
+        if len(alert_history) > MAX_ALERT_HISTORY:
+            alert_history.pop(0)
+
+        await alert_manager.broadcast(alert_data)
+
+    return {
+        "status": status,
+        "component": component,
+        "alert": alert.to_dict() if alert else None,
     }
 
 

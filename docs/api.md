@@ -1,141 +1,39 @@
-\# Ice-Stream Alert Server API
+# Ice-Stream Alert Server API
 
-
-
-\## Overview
-
-
+## Overview
 
 FastAPI backend for data-quality monitoring, system health monitoring,
+historical quality metrics, alert history, and real-time WebSocket alerts.
 
-alert history, and real-time WebSocket alerts.
-
-
-
-\## Base URL
-
-
+## Base URL
 
 http://127.0.0.1:8000
 
-
-
-\## WebSocket
-
-
+## WebSocket
 
 ws://127.0.0.1:8000/ws/alerts
 
+WebSocket clients can receive the following message types:
 
+- `QUALITY_METRICS`
+- `QUALITY_ALERT`
+- `QUALITY_RECOVERY`
+- `SYSTEM_ALERT`
+- `SYSTEM_RECOVERY`
 
-\---
+---
 
+## Health
 
-
-\## Health
-
-
-
-\### GET /health
-
-
+### GET /health
 
 Liveness check for the alert server.
 
-
-
-\### GET /health/ready
-
-
-
-Readiness check for the backend.
-
-
-
-\---
-
-
-
-\## Quality Status
-
-
-
-\### GET /quality/status
-
-
-
-Returns the current quality state and metrics.
-
-
-
-Quality thresholds:
-
-
-
-| Quality Score | Status |
-
-|---|---|
-
-| >= 95 | HEALTHY |
-
-| >= 90 | WARNING |
-
-| < 90 | CRITICAL |
-
-
-
-\---
-
-
-
-\## Alert History
-
-
-
-\### GET /alerts
-
-
-
-Returns recent alert history.
-
-
-
-\---
-
-
-
-\## System Status
-
-
-
-\### GET /system/status
-
-
-
-Returns the current infrastructure component status.
-
-
-
-Example:
-
-
+Example response:
 
 ```json
-
 {
-
-&#x20; "system\_status": "DEGRADED",
-
-&#x20; "components": {
-
-&#x20;   "kafka": "DOWN",
-
-&#x20;   "flink": "UP",
-
-&#x20;   "iceberg": "UP",
-
-&#x20;   "alert\_server": "UP"
-
-&#x20; }
-
+  "status": "ok",
+  "service": "alert-server",
+  "timestamp": "2026-09-09T10:00:00+00:00"
 }

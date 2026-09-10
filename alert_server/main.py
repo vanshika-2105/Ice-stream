@@ -1,6 +1,11 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
 import sys
 from pathlib import Path
+
 
 # Add quality-rules to Python path
 sys.path.insert(
@@ -9,8 +14,12 @@ sys.path.insert(
 )
 
 from alert_server.alert_manager import AlertManager
+from alert_server.system_alerts import SystemAlertEngine
+from alert_server.circuit_breaker import CircuitBreaker
+
 from alerts import AlertEngine
 from metrics import QualityMetrics
+from models import QualityMetricSnapshot
 from validator import validate_checkout_event
 
 
@@ -20,19 +29,89 @@ app = FastAPI(
     version="0.3.0",
 )
 
+
+# --------------------------------------------------
+# CORS
+# --------------------------------------------------
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --------------------------------------------------
+# Application state
+# --------------------------------------------------
+
 alert_manager = AlertManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
+system_alert_engine = SystemAlertEngine()
+circuit_breaker = CircuitBreaker()
 
+
+# In-memory alert history.
+# Stores quality alerts, recoveries, and system alerts.
+alert_history = []
+
+MAX_ALERT_HISTORY = 100
+
+
+# In-memory historical quality metric snapshots.
+quality_history = []
+
+MAX_QUALITY_HISTORY = 100
+def calculate_quality_trend() -> str:
+    """Return UP, DOWN, or STABLE based on recent quality scores."""
+
+    if len(quality_history) < 2:
+        return "STABLE"
+
+    previous_score = quality_history[-2].quality_score
+    latest_score = quality_history[-1].quality_score
+
+    if latest_score > previous_score:
+        return "UP"
+
+    if latest_score < previous_score:
+        return "DOWN"
+
+    return "STABLE"
+
+
+# --------------------------------------------------
+# Health endpoints
+# --------------------------------------------------
 
 @app.get("/health")
 def health_check():
-    """Check whether the backend service is running."""
+    """Liveness check: verify that the alert server process is running."""
+
     return {
-        "status": "healthy",
-        "service": "alert-server"
+        "status": "ok",
+        "service": "alert-server",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
+
+@app.get("/health/ready")
+def readiness_check():
+    """Readiness check: verify that the backend is ready to serve requests."""
+
+    return {
+        "status": "ready",
+        "service": "alert-server",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# --------------------------------------------------
+# Root endpoint
+# --------------------------------------------------
 
 @app.get("/")
 def root():
@@ -40,6 +119,10 @@ def root():
         "message": "Ice-Stream Alert Server is running"
     }
 
+
+# --------------------------------------------------
+# Current metrics endpoint
+# --------------------------------------------------
 
 @app.get("/metrics")
 def get_metrics():
@@ -49,57 +132,189 @@ def get_metrics():
 
     return {
         **metrics,
-        "status": alert_engine.get_status(metrics["quality_score"]),
-    }
-
-
-@app.get("/alerts")
-def get_alerts():
-    """Return the current data-quality alert state."""
-
-    metrics = quality_metrics.get_metrics()
-    status = alert_engine.get_status(metrics["quality_score"])
-
-    if status == "HEALTHY":
-        return {
-            "alert": False,
-            "severity": None,
-            "status": "HEALTHY",
-            "quality_score": metrics["quality_score"],
-        }
-
-    return {
-        "alert": True,
-        "severity": status,
-        "status": status,
-        "quality_score": metrics["quality_score"],
-        "message": (
-            "Data quality entered warning range"
-            if status == "WARNING"
-            else "Data quality dropped below critical threshold"
+        "status": alert_engine.get_status(
+            metrics["quality_score"]
         ),
     }
 
 
-@app.post("/events")
-async def process_event(event: dict):
-    """
-    Validate an event, update metrics, broadcast metrics,
-    and generate state-transition alerts.
-    """
+# --------------------------------------------------
+# Alert history endpoint
+# --------------------------------------------------
 
-    result = validate_checkout_event(event)
+@app.get("/alerts")
+def get_alerts():
+    """Return recent quality and system alert history."""
 
-    if result["valid"]:
-        quality_metrics.record_valid()
-    else:
-        quality_metrics.record_invalid(result["errors"])
+    return {
+        "alerts": alert_history
+    }
+
+
+# --------------------------------------------------
+# Current quality status
+# --------------------------------------------------
+
+@app.get("/quality/status")
+def get_quality_status():
+    """Return the current data-quality state and metrics."""
 
     metrics = quality_metrics.get_metrics()
 
-    status = alert_engine.get_status(metrics["quality_score"])
+    return {
+    "status": alert_engine.get_status(
+        metrics["quality_score"]
+    ),
+    "quality_score": metrics["quality_score"],
+    "total_events": metrics["total_events"],
+    "valid_events": metrics["valid_events"],
+    "invalid_events": metrics["invalid_events"],
+    "invalid_event_rate": metrics["invalid_event_rate"],
+    "trend": calculate_quality_trend(),
+}
 
-    # Broadcast current metrics.
+# --------------------------------------------------
+# Historical quality metrics
+# --------------------------------------------------
+
+@app.get("/quality/history")
+def get_quality_history(limit: int = 20):
+    """
+    Return historical data-quality metric snapshots.
+
+    Default:
+        20 snapshots
+
+    Maximum:
+        100 snapshots
+    """
+
+    if limit < 1 or limit > MAX_QUALITY_HISTORY:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"limit must be between 1 and "
+                f"{MAX_QUALITY_HISTORY}"
+            ),
+        )
+
+    snapshots = quality_history[-limit:]
+
+    return {
+        "history": [
+            snapshot.to_dict()
+            for snapshot in snapshots
+        ]
+    }
+
+
+# --------------------------------------------------
+# System status
+# --------------------------------------------------
+
+@app.get("/system/status")
+def get_system_status():
+    """Return the current infrastructure system status."""
+
+    return system_alert_engine.get_system_status()
+
+
+@app.post("/system/components/{component}")
+async def update_system_component(
+    component: str,
+    payload: dict,
+):
+    """Update the status of an infrastructure component."""
+
+    status = payload.get("status")
+
+    if status not in {"UP", "DOWN"}:
+        raise HTTPException(
+            status_code=400,
+            detail="status must be UP or DOWN",
+        )
+
+    alert = system_alert_engine.update_component(
+        component=component,
+        status=status,
+        message=payload.get("message"),
+    )
+
+    if alert is not None:
+
+        alert_data = alert.to_dict()
+
+        alert_data["id"] = (
+            f"system-alert-{len(alert_history) + 1:03d}"
+        )
+
+        alert_history.append(alert_data)
+
+        if len(alert_history) > MAX_ALERT_HISTORY:
+            alert_history.pop(0)
+
+        await alert_manager.broadcast(alert_data)
+
+    return {
+        "status": status,
+        "component": component,
+        "alert": alert.to_dict() if alert else None,
+    }
+
+
+# --------------------------------------------------
+# Event processing
+# --------------------------------------------------
+
+@app.post("/events")
+async def process_event(event: dict):
+    """
+    Validate an event, update metrics, store historical
+    metrics, broadcast metrics, and generate alerts.
+    """
+
+    # Validate checkout event
+    result = validate_checkout_event(event)
+
+    # Update quality metrics
+    if result["valid"]:
+        quality_metrics.record_valid()
+    else:
+        quality_metrics.record_invalid(
+            result["errors"]
+        )
+
+    # Get current metrics
+    metrics = quality_metrics.get_metrics()
+
+    # Determine current quality status
+    status = alert_engine.get_status(
+        metrics["quality_score"]
+    )
+
+    # --------------------------------------------------
+    # Store historical quality snapshot
+    # --------------------------------------------------
+
+    snapshot = QualityMetricSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        total_events=metrics["total_events"],
+        valid_events=metrics["valid_events"],
+        invalid_events=metrics["invalid_events"],
+        quality_score=metrics["quality_score"],
+        invalid_event_rate=metrics["invalid_event_rate"],
+    )
+
+    quality_history.append(snapshot)
+
+    # Keep only the latest 100 snapshots
+    if len(quality_history) > MAX_QUALITY_HISTORY:
+        quality_history.pop(0)
+
+    # --------------------------------------------------
+    # Broadcast current quality metrics
+    # --------------------------------------------------
+
     metrics_message = {
         "type": "QUALITY_METRICS",
         "total_events": metrics["total_events"],
@@ -109,19 +324,42 @@ async def process_event(event: dict):
         "invalid_event_rate": metrics["invalid_event_rate"],
         "error_counts": metrics["error_counts"],
         "status": status,
+        "trend": calculate_quality_trend(),
     }
 
-    await alert_manager.broadcast(metrics_message)
+    await alert_manager.broadcast(
+        metrics_message
+    )
 
-    # Let AlertEngine decide whether a state-transition
-    # alert/recovery event should be generated.
+    # --------------------------------------------------
+    # Evaluate quality alert
+    # --------------------------------------------------
+
     alert = alert_engine.evaluate(
         quality_score=metrics["quality_score"],
         invalid_event_rate=metrics["invalid_event_rate"],
     )
 
     if alert is not None:
-        await alert_manager.broadcast(alert.to_dict())
+
+        alert_data = alert.to_dict()
+
+        # Add unique history ID
+        alert_data["id"] = (
+            f"alert-{len(alert_history) + 1:03d}"
+        )
+
+        # Store newest alert
+        alert_history.append(alert_data)
+
+        # Keep only the latest alerts
+        if len(alert_history) > MAX_ALERT_HISTORY:
+            alert_history.pop(0)
+
+        # Broadcast alert
+        await alert_manager.broadcast(
+            alert_data
+        )
 
     return {
         **result,
@@ -129,13 +367,20 @@ async def process_event(event: dict):
     }
 
 
+# --------------------------------------------------
+# WebSocket
+# --------------------------------------------------
+
 @app.websocket("/ws/alerts")
-async def websocket_alerts(websocket: WebSocket):
+async def websocket_alerts(
+    websocket: WebSocket,
+):
     """WebSocket endpoint for real-time data-quality messages."""
 
     await alert_manager.connect(websocket)
 
     try:
+
         while True:
             await websocket.receive_text()
 
@@ -145,6 +390,10 @@ async def websocket_alerts(websocket: WebSocket):
     except Exception:
         alert_manager.disconnect(websocket)
 
+
+# --------------------------------------------------
+# Test alert
+# --------------------------------------------------
 
 @app.post("/alerts/test")
 async def send_test_alert():

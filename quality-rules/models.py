@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from datetime import datetime
 from numbers import Real
@@ -44,6 +45,27 @@ ALLOWED_CURRENCIES = {
     "GBP",
 }
 
+@dataclass
+class QualityMetricSnapshot:
+    """Represent a historical snapshot of data-quality metrics."""
+
+    timestamp: datetime
+    total_events: int
+    valid_events: int
+    invalid_events: int
+    quality_score: float
+    invalid_event_rate: float
+
+    def to_dict(self) -> dict:
+        """Convert the snapshot to a dashboard-friendly dictionary."""
+        return {
+            "timestamp": self.timestamp.astimezone(timezone.utc).isoformat(),
+            "total_events": self.total_events,
+            "valid_events": self.valid_events,
+            "invalid_events": self.invalid_events,
+            "quality_score": self.quality_score,
+            "invalid_event_rate": self.invalid_event_rate,
+        }
 
 def _error(field: str, code: str, message: str) -> dict:
     """Create a standardized validation error."""

@@ -1,7 +1,7 @@
 function DLQStatus({ invalidEvents = 0 }) {
   const hasErrors = invalidEvents > 0;
 
-  return (
+  return(
     <section className="dlq-status">
       <h2>Dead Letter Queue</h2>
 

@@ -1,4 +1,4 @@
- import { useEffect, useState } from "react";
+  import { useEffect, useState } from "react";
 
 import Header from "./components/Header";
 import Pipeline from "./components/Pipeline";
@@ -14,6 +14,7 @@ import PipelineStatus from "./components/PipelineStatus";
 import QualityTrend from "./components/QualityTrend";
 import DLQStatus from "./components/DLQStatus";
 import AlertHistory from "./components/AlertHistory";
+import QualityAnomaly from "./components/QualityAnomaly";
 
 import "./App.css";
 
@@ -43,6 +44,11 @@ function App() {
   // =========================
   const [alert, setAlert] = useState(null);
   const [alerts, setAlerts] = useState([]);
+
+  // =========================
+  // ANOMALY STATE
+  // =========================
+  const [anomaly, setAnomaly] = useState(null);
 
   // =========================
   // QUALITY HISTORY
@@ -111,7 +117,10 @@ function App() {
           }
         }
       } catch (error) {
-        console.error("Failed to fetch initial dashboard data:", error);
+        console.error(
+          "Failed to fetch initial dashboard data:",
+          error
+        );
       }
     };
 
@@ -124,7 +133,10 @@ function App() {
   useEffect(() => {
     if (!latestMessage) return;
 
-    console.log("Dashboard received:", latestMessage);
+    console.log(
+      "Dashboard received:",
+      latestMessage
+    );
 
     // -------------------------
     // QUALITY METRICS
@@ -146,12 +158,19 @@ function App() {
                 latestMessage.timestamp ||
                 new Date().toISOString(),
             },
-          ].slice(-20)
+          ].slice(-50)
         );
       }
 
       // Update last updated time
       setLastUpdated(new Date());
+    }
+
+    // -------------------------
+    // QUALITY ANOMALY
+    // -------------------------
+    if (latestMessage.type === "QUALITY_ANOMALY") {
+      setAnomaly(latestMessage);
     }
 
     // -------------------------
@@ -180,20 +199,24 @@ function App() {
       if (latestMessage.quality_score !== undefined) {
         setMetrics((prev) => ({
           ...prev,
-          quality_score: latestMessage.quality_score,
-          status: latestMessage.status || "HEALTHY",
+          quality_score:
+            latestMessage.quality_score,
+          status:
+            latestMessage.status ||
+            "HEALTHY",
         }));
 
         setQualityHistory((prev) =>
           [
             ...prev,
             {
-              score: latestMessage.quality_score,
+              score:
+                latestMessage.quality_score,
               timestamp:
                 latestMessage.timestamp ||
                 new Date().toISOString(),
             },
-          ].slice(-20)
+          ].slice(-50)
         );
 
         setLastUpdated(new Date());
@@ -206,11 +229,14 @@ function App() {
   // =====================================================
   return (
     <main className="app">
+
       {/* Header */}
       <Header />
 
       {/* Overall Pipeline Status */}
-      <PipelineStatus status={metrics.status} />
+      <PipelineStatus
+        status={metrics.status}
+      />
 
       {/* Pipeline */}
       <Pipeline />
@@ -257,13 +283,18 @@ function App() {
         score={metrics.quality_score}
       />
 
-      {/* Quality Trend */}
-      <QualityTrend
-        history={qualityHistory}
-      />
+     {/* Quality Trend */}
+<QualityTrend
+  history={qualityHistory}
+/>
 
-      {/* Existing Status Card */}
-      <StatusCard />
+{/* Quality Anomaly */}
+<QualityAnomaly
+  anomaly={anomaly}
+/>
+
+{/* Existing Status Card */}
+<StatusCard />
 
       {/* WebSocket Status */}
       <section className="websocket-card">
@@ -295,6 +326,7 @@ function App() {
       <AlertHistory
         alerts={alerts}
       />
+
     </main>
   );
 }

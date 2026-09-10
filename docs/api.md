@@ -3,7 +3,8 @@
 ## Overview
 
 FastAPI backend for data-quality monitoring, system health monitoring,
-historical quality metrics, alert history, and real-time WebSocket alerts.
+historical quality metrics, anomaly detection, alert history, and
+real-time WebSocket alerts.
 
 ## Base URL
 
@@ -16,6 +17,7 @@ ws://127.0.0.1:8000/ws/alerts
 WebSocket clients can receive the following message types:
 
 - `QUALITY_METRICS`
+- `QUALITY_ANOMALY`
 - `QUALITY_ALERT`
 - `QUALITY_RECOVERY`
 - `SYSTEM_ALERT`

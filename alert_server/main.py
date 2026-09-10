@@ -21,7 +21,7 @@ from alerts import AlertEngine
 from metrics import QualityMetrics
 from models import QualityMetricSnapshot
 from validator import validate_checkout_event
-
+from anomaly import detect_anomaly
 
 app = FastAPI(
     title="Ice-Stream Alert Server",
@@ -206,6 +206,39 @@ def get_quality_history(limit: int = 20):
             for snapshot in snapshots
         ]
     }
+# --------------------------------------------------
+# Quality anomaly detection
+# --------------------------------------------------
+
+@app.get("/quality/anomaly")
+def get_quality_anomaly():
+    """
+    Detect whether the current quality score is anomalous
+    compared with recent historical quality scores.
+    """
+
+    metrics = quality_metrics.get_metrics()
+    current_quality = metrics["quality_score"]
+
+    # Use previous snapshots as the baseline history.
+    # The current score must not be included in its own baseline.
+    history = [
+        snapshot.quality_score
+        for snapshot in quality_history[:-1]
+    ]
+
+    result = detect_anomaly(
+        current_quality=current_quality,
+        history=history,
+    )
+
+    return {
+        "is_anomaly": result.is_anomaly,
+        "current_quality": result.current_quality,
+        "baseline_quality": result.baseline_quality,
+        "deviation": round(result.deviation, 2),
+        "reason": result.reason,
+    }
 
 
 # --------------------------------------------------
@@ -310,6 +343,20 @@ async def process_event(event: dict):
     # Keep only the latest 100 snapshots
     if len(quality_history) > MAX_QUALITY_HISTORY:
         quality_history.pop(0)
+    # --------------------------------------------------
+    # Detect quality anomaly
+    # --------------------------------------------------
+
+    anomaly_history = [
+        snapshot.quality_score
+        for snapshot in quality_history[:-1]
+    ]
+
+    anomaly_result = detect_anomaly(
+        current_quality=metrics["quality_score"],
+        history=anomaly_history,
+    )
+
 
     # --------------------------------------------------
     # Broadcast current quality metrics
@@ -330,6 +377,18 @@ async def process_event(event: dict):
     await alert_manager.broadcast(
         metrics_message
     )
+    # Broadcast anomaly only when one is detected.
+    if anomaly_result.is_anomaly:
+        anomaly_message = {
+            "type": "QUALITY_ANOMALY",
+            "is_anomaly": True,
+            "current_quality": anomaly_result.current_quality,
+            "baseline_quality": anomaly_result.baseline_quality,
+            "deviation": round(anomaly_result.deviation, 2),
+            "reason": anomaly_result.reason,
+        }
+
+        await alert_manager.broadcast(anomaly_message)
 
     # --------------------------------------------------
     # Evaluate quality alert

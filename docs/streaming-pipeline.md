@@ -390,3 +390,196 @@ Invalid quantity, missing `customer_id`, invalid currency, and malformed JSON sc
 The original event, validation errors, and failure timestamp were preserved for invalid records.
 
 This confirms that Ice-Stream can isolate bad data while allowing valid streaming events to continue through the Flink and Iceberg pipeline.
+# Day 8 – Data Validation and Dead-Letter Queue
+
+## Objective
+
+Implement data validation in the Flink streaming pipeline and route invalid checkout events to a Dead-Letter Queue (DLQ), while valid events are written to Apache Iceberg.
+
+## Pipeline
+
+Kafka `checkout-events`
+→ Flink
+→ Data Validation
+→ Valid Events → Iceberg
+→ Invalid Events → Kafka `checkout-events-dlq`
+
+## Validation Rules
+
+The following fields are validated:
+
+* `event_id` must not be NULL
+* `event_type` must not be NULL
+* `order_id` must not be NULL
+* `customer_id` must not be NULL
+* `product_id` must not be NULL
+* `quantity` must not be NULL and must be greater than 0
+* `amount` must not be NULL and must be greater than or equal to 0
+* `currency` must not be NULL
+
+## Valid Event Processing
+
+A valid test event was sent to the Kafka `checkout-events` topic:
+
+* Event ID: `test-valid-001`
+* Quantity: `2`
+* Amount: `100.50`
+* Currency: `INR`
+
+The Flink job was running successfully and the valid-event branch was connected to the Iceberg writer.
+
+A new Iceberg data object was created in MinIO, confirming that streaming data was being written to Iceberg.
+
+## Invalid Event Processing
+
+An invalid test event was sent with:
+
+* Event ID: `test-invalid-001`
+* Quantity: `-1`
+
+The event was rejected by the validation rules and successfully written to the Kafka DLQ topic:
+
+`checkout-events-dlq`
+
+The DLQ record contained the validation error:
+
+`Invalid quantity`
+
+## Flink Job Validation
+
+The Flink streaming job was verified through the Flink REST API.
+
+Status:
+
+`RUNNING`
+
+The job plan confirmed two processing branches:
+
+1. Valid records → `IcebergStreamWriter`
+2. Invalid records → `checkout_events_dlq`
+
+## Storage Validation
+
+Iceberg data files were verified in MinIO under:
+
+`/data/warehouse/checkout/checkout_events/data`
+
+A newly created Iceberg data object was observed after processing the valid test event.
+
+## Result
+
+Day 8 successfully implemented:
+
+* Kafka event ingestion
+* Flink streaming validation
+* Valid event processing
+* Iceberg storage
+* Invalid event detection
+* Dead-Letter Queue processing
+* Validation error reporting
+* MinIO/Iceberg data storage verification
+
+The streaming pipeline is operational and the invalid-event DLQ flow has been successfully validated.
+# Day 9 – Windowed Data Quality Metrics
+
+## Objective
+
+Extend the Flink streaming pipeline to calculate continuous data quality metrics using one-minute tumbling windows and persist the results to Apache Iceberg.
+
+## Pipeline
+
+Kafka `checkout-events`
+→ Flink
+→ Data Validation
+→ Valid Events → Iceberg `checkout_events`
+→ Invalid Events → Kafka `checkout-events-dlq`
+→ One-Minute Quality Metrics → Iceberg `quality_metrics`
+
+## Quality Metrics
+
+For each one-minute processing-time window, the Flink job calculates:
+
+* `window_start` – beginning of the one-minute window
+* `window_end` – end of the one-minute window
+* `total_events` – total events received in the window
+* `valid_events` – events that pass all validation rules
+* `invalid_events` – events that fail validation
+* `quality_score` – percentage of valid events
+* `invalid_event_rate` – percentage of invalid events
+
+The calculations are:
+
+```text
+quality_score = valid_events / total_events × 100
+
+invalid_event_rate = invalid_events / total_events × 100
+```
+
+For example:
+
+| Total Events | Valid Events | Invalid Events | Quality Score | Invalid Event Rate |
+| -----------: | -----------: | -------------: | ------------: | -----------------: |
+|          100 |           98 |              2 |           98% |                 2% |
+|          100 |           93 |              7 |           93% |                 7% |
+|          100 |           85 |             15 |           85% |                15% |
+
+## Windowing
+
+The quality metrics use a one-minute tumbling window based on Flink processing time.
+
+Each event belongs to exactly one one-minute window. This provides continuous monitoring of the quality of the incoming checkout stream without requiring event-time watermarks.
+
+## Metrics Storage
+
+Quality metrics are stored in the Apache Iceberg table:
+
+```text
+iceberg_catalog.checkout.quality_metrics
+```
+
+The table contains:
+
+```text
+window_start
+window_end
+total_events
+valid_events
+invalid_events
+quality_score
+invalid_event_rate
+```
+
+This allows downstream monitoring and dashboard components to query historical data quality trends.
+
+## Validation and DLQ Preservation
+
+Invalid events continue to be preserved in the Kafka topic:
+
+```text
+checkout-events-dlq
+```
+
+The DLQ retains the original event fields together with a `validation_error` describing the validation failure.
+
+Valid events continue to be written to the Iceberg `checkout_events` table.
+
+## Day 9 Verification
+
+The Day 9 pipeline was verified by:
+
+1. Starting the Kafka, MinIO, Iceberg REST, and Flink services.
+2. Running the continuous checkout event producer.
+3. Sending both valid and intentionally invalid events.
+4. Confirming that the Flink validation job remained in the `RUNNING` state.
+5. Confirming that invalid events reached `checkout-events-dlq`.
+6. Confirming that the `checkout_events` Iceberg table continued receiving Parquet data.
+7. Confirming that the `quality_metrics` Iceberg table produced windowed Parquet data.
+8. Running the project test suite successfully.
+
+The project test suite completed with:
+
+```text
+63 passed, 1 warning
+```
+
+The warning was a dependency deprecation warning and did not cause any test failures.

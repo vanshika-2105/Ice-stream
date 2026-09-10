@@ -1,4 +1,4 @@
-function AlertHistory({ alerts = [] }) {
+ function AlertHistory({ alerts = [] }) {
   return (
     <section className="alert-history">
       <h2>Alert History</h2>
@@ -9,7 +9,7 @@ function AlertHistory({ alerts = [] }) {
         <div className="alert-history-list">
           {alerts.map((item, index) => (
             <div
-              key={index}
+              key={`${item.timestamp || "alert"}-${index}`}
               className="alert-history-item"
             >
               <div>

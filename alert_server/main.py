@@ -13,6 +13,7 @@ sys.path.insert(
     str(Path(__file__).resolve().parent.parent / "quality-rules")
 )
 
+
 from alert_server.alert_manager import AlertManager
 from alert_server.system_alerts import SystemAlertEngine
 from alert_server.circuit_breaker import CircuitBreaker
@@ -22,6 +23,7 @@ from metrics import QualityMetrics
 from models import QualityMetricSnapshot
 from validator import validate_checkout_event
 from anomaly import detect_anomaly
+
 
 app = FastAPI(
     title="Ice-Stream Alert Server",
@@ -54,17 +56,24 @@ system_alert_engine = SystemAlertEngine()
 circuit_breaker = CircuitBreaker()
 
 
-# In-memory alert history.
-# Stores quality alerts, recoveries, and system alerts.
+# --------------------------------------------------
+# In-memory alert history
+# --------------------------------------------------
+
 alert_history = []
 
 MAX_ALERT_HISTORY = 100
 
 
-# In-memory historical quality metric snapshots.
+# --------------------------------------------------
+# In-memory historical quality metric snapshots
+# --------------------------------------------------
+
 quality_history = []
 
 MAX_QUALITY_HISTORY = 100
+
+
 def calculate_quality_trend() -> str:
     """Return UP, DOWN, or STABLE based on recent quality scores."""
 
@@ -162,16 +171,19 @@ def get_quality_status():
     metrics = quality_metrics.get_metrics()
 
     return {
-    "status": alert_engine.get_status(
-        metrics["quality_score"]
-    ),
-    "quality_score": metrics["quality_score"],
-    "total_events": metrics["total_events"],
-    "valid_events": metrics["valid_events"],
-    "invalid_events": metrics["invalid_events"],
-    "invalid_event_rate": metrics["invalid_event_rate"],
-    "trend": calculate_quality_trend(),
-}
+        "status": alert_engine.get_status(
+            metrics["quality_score"]
+        ),
+        "quality_score": metrics["quality_score"],
+        "total_events": metrics["total_events"],
+        "valid_events": metrics["valid_events"],
+        "invalid_events": metrics["invalid_events"],
+        "invalid_event_rate": metrics["invalid_event_rate"],
+        "trend": calculate_quality_trend(),
+        "is_anomaly": alert_engine.anomaly_active,
+        "anomaly_severity": alert_engine.anomaly_severity,
+    }
+
 
 # --------------------------------------------------
 # Historical quality metrics
@@ -206,6 +218,8 @@ def get_quality_history(limit: int = 20):
             for snapshot in snapshots
         ]
     }
+
+
 # --------------------------------------------------
 # Quality anomaly detection
 # --------------------------------------------------
@@ -234,6 +248,7 @@ def get_quality_anomaly():
 
     return {
         "is_anomaly": result.is_anomaly,
+        "severity": result.severity,
         "current_quality": result.current_quality,
         "baseline_quality": result.baseline_quality,
         "deviation": round(result.deviation, 2),
@@ -306,10 +321,16 @@ async def process_event(event: dict):
     metrics, broadcast metrics, and generate alerts.
     """
 
+    # --------------------------------------------------
     # Validate checkout event
+    # --------------------------------------------------
+
     result = validate_checkout_event(event)
 
+    # --------------------------------------------------
     # Update quality metrics
+    # --------------------------------------------------
+
     if result["valid"]:
         quality_metrics.record_valid()
     else:
@@ -317,10 +338,16 @@ async def process_event(event: dict):
             result["errors"]
         )
 
+    # --------------------------------------------------
     # Get current metrics
+    # --------------------------------------------------
+
     metrics = quality_metrics.get_metrics()
 
+    # --------------------------------------------------
     # Determine current quality status
+    # --------------------------------------------------
+
     status = alert_engine.get_status(
         metrics["quality_score"]
     )
@@ -343,6 +370,7 @@ async def process_event(event: dict):
     # Keep only the latest 100 snapshots
     if len(quality_history) > MAX_QUALITY_HISTORY:
         quality_history.pop(0)
+
     # --------------------------------------------------
     # Detect quality anomaly
     # --------------------------------------------------
@@ -356,7 +384,6 @@ async def process_event(event: dict):
         current_quality=metrics["quality_score"],
         history=anomaly_history,
     )
-
 
     # --------------------------------------------------
     # Broadcast current quality metrics
@@ -377,18 +404,52 @@ async def process_event(event: dict):
     await alert_manager.broadcast(
         metrics_message
     )
-    # Broadcast anomaly only when one is detected.
+
+    # --------------------------------------------------
+    # Evaluate intelligent anomaly alert
+    # --------------------------------------------------
+
+    anomaly_alert = alert_engine.evaluate_anomaly(
+        is_anomaly=anomaly_result.is_anomaly,
+        severity=anomaly_result.severity,
+        current_quality=anomaly_result.current_quality,
+        baseline_quality=anomaly_result.baseline_quality,
+        deviation=anomaly_result.deviation,
+        reason=anomaly_result.reason,
+    )
+
+    # --------------------------------------------------
+    # Preserve existing anomaly notification
+    # --------------------------------------------------
+
     if anomaly_result.is_anomaly:
+
         anomaly_message = {
             "type": "QUALITY_ANOMALY",
             "is_anomaly": True,
+            "severity": anomaly_result.severity,
             "current_quality": anomaly_result.current_quality,
             "baseline_quality": anomaly_result.baseline_quality,
-            "deviation": round(anomaly_result.deviation, 2),
+            "deviation": round(
+                anomaly_result.deviation,
+                2,
+            ),
             "reason": anomaly_result.reason,
         }
 
-        await alert_manager.broadcast(anomaly_message)
+        await alert_manager.broadcast(
+            anomaly_message
+        )
+
+    # --------------------------------------------------
+    # Broadcast intelligent anomaly alert/recovery
+    # --------------------------------------------------
+
+    if anomaly_alert is not None:
+
+        await alert_manager.broadcast(
+            anomaly_alert
+        )
 
     # --------------------------------------------------
     # Evaluate quality alert

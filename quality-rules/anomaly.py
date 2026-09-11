@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from statistics import mean
 
 
-ANOMALY_DROP_THRESHOLD = 5.0
+ANOMALY_WARNING_THRESHOLD = 5.0
+ANOMALY_CRITICAL_THRESHOLD = 10.0
 ANOMALY_WINDOW_SIZE = 5
 
 
@@ -15,6 +16,7 @@ class AnomalyResult:
     baseline_quality: float
     deviation: float
     reason: str
+    severity: str
 
 
 def calculate_baseline(history: list[float]) -> float:
@@ -32,7 +34,7 @@ def detect_anomaly(
     current_quality: float,
     history: list[float],
 ) -> AnomalyResult:
-    """Detect whether current quality significantly differs from history."""
+    """Detect quality anomalies and classify their severity."""
 
     if len(history) < 2:
         return AnomalyResult(
@@ -41,19 +43,30 @@ def detect_anomaly(
             baseline_quality=0.0,
             deviation=0.0,
             reason="Insufficient historical data",
+            severity="INFO",
         )
 
     baseline = calculate_baseline(history)
 
     deviation = baseline - current_quality
 
-    is_anomaly = deviation >= ANOMALY_DROP_THRESHOLD
-
-    if is_anomaly:
+    if deviation > ANOMALY_CRITICAL_THRESHOLD:
+        is_anomaly = True
+        severity = "CRITICAL"
         reason = (
             "Quality dropped significantly below historical baseline"
         )
+
+    elif deviation >= ANOMALY_WARNING_THRESHOLD:
+        is_anomaly = True
+        severity = "WARNING"
+        reason = (
+            "Quality dropped significantly below historical baseline"
+        )
+
     else:
+        is_anomaly = False
+        severity = "INFO"
         reason = "Quality is within expected range"
 
     return AnomalyResult(
@@ -62,4 +75,5 @@ def detect_anomaly(
         baseline_quality=baseline,
         deviation=deviation,
         reason=reason,
+        severity=severity,
     )

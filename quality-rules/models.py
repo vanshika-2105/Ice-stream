@@ -67,6 +67,30 @@ class QualityMetricSnapshot:
             "invalid_event_rate": self.invalid_event_rate,
         }
 
+@dataclass
+class QualityAnomalyAlert:
+    """Represent an intelligent quality anomaly alert."""
+
+    type: str
+    severity: str
+    current_quality: float
+    baseline_quality: float
+    deviation: float
+    message: str
+    timestamp: str
+
+    def to_dict(self) -> dict:
+        """Convert the anomaly alert to a WebSocket-friendly dictionary."""
+
+        return {
+            "type": self.type,
+            "severity": self.severity,
+            "current_quality": self.current_quality,
+            "baseline_quality": self.baseline_quality,
+            "deviation": self.deviation,
+            "message": self.message,
+            "timestamp": self.timestamp,
+        }
 def _error(field: str, code: str, message: str) -> dict:
     """Create a standardized validation error."""
     return {

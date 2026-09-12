@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 
 from kafka import KafkaProducer
+from kafka.errors import KafkaTimeoutError, KafkaError
 
 
 # Kafka configuration
@@ -17,12 +18,23 @@ EVENT_INTERVAL = float(os.getenv("EVENT_INTERVAL", "1"))
 INVALID_EVENT_RATE = float(os.getenv("INVALID_EVENT_RATE", "0.10"))
 
 
+# Day 10 reliability configuration
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
+RETRY_DELAY = float(os.getenv("RETRY_DELAY", "3"))
+
+
 # Validate configuration
 if EVENT_INTERVAL <= 0:
     raise ValueError("EVENT_INTERVAL must be greater than 0")
 
 if not 0 <= INVALID_EVENT_RATE <= 1:
     raise ValueError("INVALID_EVENT_RATE must be between 0 and 1")
+
+if MAX_RETRIES <= 0:
+    raise ValueError("MAX_RETRIES must be greater than 0")
+
+if RETRY_DELAY <= 0:
+    raise ValueError("RETRY_DELAY must be greater than 0")
 
 
 # Create Kafka producer
@@ -47,7 +59,6 @@ def generate_checkout_event(event_number):
         "currency": "INR"
     }
 
-    # Randomly create an invalid event according to the configured rate.
     if random.random() < INVALID_EVENT_RATE:
 
         invalid_type = random.choice([
@@ -74,6 +85,45 @@ def generate_checkout_event(event_number):
     return event, True, None
 
 
+def send_event_with_retry(event):
+    """Send an event to Kafka with retry handling."""
+
+    for attempt in range(1, MAX_RETRIES + 1):
+
+        try:
+            future = producer.send(
+                TOPIC,
+                value=event
+            )
+
+            future.get(timeout=10)
+
+            if attempt > 1:
+                print("[INFO] Kafka connection restored")
+                print("[INFO] Producer resumed")
+
+            return True
+
+        except (KafkaTimeoutError, KafkaError) as error:
+
+            print(f"[ERROR] Kafka unavailable: {error}")
+
+            if attempt < MAX_RETRIES:
+
+                print(
+                    f"[INFO] Retrying connection... "
+                    f"attempt {attempt}/{MAX_RETRIES}"
+                )
+
+                time.sleep(RETRY_DELAY)
+
+            else:
+
+                print("[ERROR] Maximum retry attempts reached.")
+
+    return False
+
+
 def main():
 
     event_number = 1
@@ -82,7 +132,7 @@ def main():
     valid_percentage = 100 - invalid_percentage
 
     print("=" * 60)
-    print("Ice-Stream Day 8 Kafka Producer")
+    print("Ice-Stream Day 10 Kafka Producer")
     print("=" * 60)
     print(f"[INFO] Kafka broker: {KAFKA_BROKER}")
     print(f"[INFO] Kafka topic: {TOPIC}")
@@ -93,6 +143,8 @@ def main():
         f"{valid_percentage:.1f}% valid / "
         f"{invalid_percentage:.1f}% invalid"
     )
+    print(f"[INFO] Maximum retries: {MAX_RETRIES}")
+    print(f"[INFO] Retry delay: {RETRY_DELAY} second(s)")
     print("[INFO] Producer mode: CONTINUOUS")
     print("[INFO] Press Ctrl+C to stop.")
     print("=" * 60)
@@ -101,28 +153,31 @@ def main():
 
         while True:
 
-            # Generate event
             event, is_valid, invalid_type = generate_checkout_event(
                 event_number
             )
 
-            # Send both valid and invalid events to checkout-events.
-            # Flink will validate them and route invalid events to the DLQ.
-            future = producer.send(
-                TOPIC,
-                value=event
-            )
+            send_success = send_event_with_retry(event)
 
-            # Wait for Kafka acknowledgement.
-            future.get(timeout=10)
+            if not send_success:
 
-            # Log event status.
+                print(
+                    f"[ERROR] Failed to send event "
+                    f"{event['event_id']} after retries."
+                )
+
+                time.sleep(RETRY_DELAY)
+                continue
+
             if is_valid:
+
                 print(
                     f"[INFO] Event sent successfully: "
                     f"{event['event_id']} | VALID"
                 )
+
             else:
+
                 print(
                     f"[WARN] Event sent: "
                     f"{event['event_id']} | "
@@ -131,7 +186,6 @@ def main():
 
             event_number += 1
 
-            # Wait before generating the next event.
             time.sleep(EVENT_INTERVAL)
 
     except KeyboardInterrupt:

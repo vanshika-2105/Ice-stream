@@ -23,6 +23,11 @@ from metrics import QualityMetrics
 from models import QualityMetricSnapshot
 from validator import validate_checkout_event
 from anomaly import detect_anomaly
+from profiler import (
+    build_profile,
+    calculate_error_percentages,
+    get_top_error,
+)
 
 
 app = FastAPI(
@@ -52,6 +57,11 @@ app.add_middleware(
 alert_manager = AlertManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
+
+# Data profiling state
+profile_event_type_counts = {}
+profile_currency_counts = {}
+
 system_alert_engine = SystemAlertEngine()
 circuit_breaker = CircuitBreaker()
 
@@ -185,6 +195,37 @@ def get_quality_status():
     }
 
 
+# --------------------------------------------------
+# Data quality profile
+# --------------------------------------------------
+
+@app.get("/quality/profile")
+def get_quality_profile():
+    """Return the current data-quality profile."""
+
+    metrics = quality_metrics.get_metrics()
+
+    profile = build_profile(
+        total_events=metrics["total_events"],
+        valid_events=metrics["valid_events"],
+        invalid_events=metrics["invalid_events"],
+        error_counts=metrics["error_counts"],
+        event_type_counts=profile_event_type_counts,
+        currency_counts=profile_currency_counts,
+    )
+
+    return {
+        "total_events": profile.total_events,
+        "valid_events": profile.valid_events,
+        "invalid_events": profile.invalid_events,
+        "error_counts": profile.error_counts,
+        "error_percentages": calculate_error_percentages(
+            profile.error_counts
+        ),
+        "event_type_counts": profile.event_type_counts,
+        "currency_counts": profile.currency_counts,
+        "top_error": get_top_error(profile.error_counts),
+    }
 # --------------------------------------------------
 # Historical quality metrics
 # --------------------------------------------------
@@ -326,6 +367,19 @@ async def process_event(event: dict):
     # --------------------------------------------------
 
     result = validate_checkout_event(event)
+        # Update data profiling distributions
+    event_type = event.get("event_type")
+    currency = event.get("currency")
+
+    if event_type:
+        profile_event_type_counts[event_type] = (
+            profile_event_type_counts.get(event_type, 0) + 1
+        )
+
+    if currency:
+        profile_currency_counts[currency] = (
+            profile_currency_counts.get(currency, 0) + 1
+        )
 
     # --------------------------------------------------
     # Update quality metrics

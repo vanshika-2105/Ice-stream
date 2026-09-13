@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ice-Stream Checkout Event",
+  "description": "Schema v1 for checkout events processed by the Ice-Stream pipeline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "timestamp",
+    "order_id",
+    "customer_id",
+    "product_id",
+    "quantity",
+    "amount",
+    "currency"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique identifier for the checkout event"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "checkout"
+      ],
+      "description": "Type of event"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp when the checkout occurred"
+    },
+    "order_id": {
+      "type": "string",
+      "description": "Unique identifier for the order"
+    },
+    "customer_id": {
+      "type": "string",
+      "description": "Unique identifier for the customer"
+    },
+    "product_id": {
+      "type": "string",
+      "description": "Unique identifier for the purchased product"
+    },
+    "quantity": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Number of products purchased"
+    },
+    "amount": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Total checkout amount"
+    },
+    "currency": {
+      "type": "string",
+      "enum": [
+        "INR",
+        "USD",
+        "EUR",
+        "GBP"
+      ],
+      "description": "Three-letter ISO currency code"
+    }
+  }
+}

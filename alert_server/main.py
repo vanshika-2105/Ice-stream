@@ -7,12 +7,19 @@ import sys
 from pathlib import Path
 
 
+# --------------------------------------------------
 # Add quality-rules to Python path
+# --------------------------------------------------
+
 sys.path.insert(
     0,
     str(Path(__file__).resolve().parent.parent / "quality-rules")
 )
 
+
+# --------------------------------------------------
+# Project imports
+# --------------------------------------------------
 
 from alert_server.alert_manager import AlertManager
 from alert_server.system_alerts import SystemAlertEngine
@@ -24,11 +31,21 @@ from models import QualityMetricSnapshot
 from validator import validate_checkout_event
 from anomaly import detect_anomaly
 
+from profiler import (
+    build_profile,
+    calculate_error_percentages,
+    get_top_error,
+)
+
+
+# --------------------------------------------------
+# FastAPI application
+# --------------------------------------------------
 
 app = FastAPI(
     title="Ice-Stream Alert Server",
     description="Backend service for streaming data quality alerts",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 
@@ -52,8 +69,17 @@ app.add_middleware(
 alert_manager = AlertManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
+
 system_alert_engine = SystemAlertEngine()
 circuit_breaker = CircuitBreaker()
+
+
+# --------------------------------------------------
+# Data profiling state
+# --------------------------------------------------
+
+profile_event_type_counts = {}
+profile_currency_counts = {}
 
 
 # --------------------------------------------------
@@ -67,6 +93,10 @@ MAX_ALERT_HISTORY = 100
 
 # --------------------------------------------------
 # In-memory historical quality metric snapshots
+#
+# These provide the backend with recent history.
+# Permanent historical storage is handled by the
+# Iceberg quality_metrics table in the Flink pipeline.
 # --------------------------------------------------
 
 quality_history = []
@@ -74,8 +104,15 @@ quality_history = []
 MAX_QUALITY_HISTORY = 100
 
 
+# --------------------------------------------------
+# Quality trend
+# --------------------------------------------------
+
 def calculate_quality_trend() -> str:
-    """Return UP, DOWN, or STABLE based on recent quality scores."""
+    """
+    Return UP, DOWN, or STABLE based on the
+    most recent quality metric snapshots.
+    """
 
     if len(quality_history) < 2:
         return "STABLE"
@@ -98,7 +135,7 @@ def calculate_quality_trend() -> str:
 
 @app.get("/health")
 def health_check():
-    """Liveness check: verify that the alert server process is running."""
+    """Liveness check."""
 
     return {
         "status": "ok",
@@ -109,7 +146,7 @@ def health_check():
 
 @app.get("/health/ready")
 def readiness_check():
-    """Readiness check: verify that the backend is ready to serve requests."""
+    """Readiness check."""
 
     return {
         "status": "ready",
@@ -130,12 +167,14 @@ def root():
 
 
 # --------------------------------------------------
-# Current metrics endpoint
+# Current metrics
 # --------------------------------------------------
 
 @app.get("/metrics")
 def get_metrics():
-    """Return current data-quality metrics with current status."""
+    """
+    Return the current quality metrics.
+    """
 
     metrics = quality_metrics.get_metrics()
 
@@ -148,25 +187,14 @@ def get_metrics():
 
 
 # --------------------------------------------------
-# Alert history endpoint
-# --------------------------------------------------
-
-@app.get("/alerts")
-def get_alerts():
-    """Return recent quality and system alert history."""
-
-    return {
-        "alerts": alert_history
-    }
-
-
-# --------------------------------------------------
 # Current quality status
 # --------------------------------------------------
 
 @app.get("/quality/status")
 def get_quality_status():
-    """Return the current data-quality state and metrics."""
+    """
+    Return the current data-quality state and metrics.
+    """
 
     metrics = quality_metrics.get_metrics()
 
@@ -192,13 +220,17 @@ def get_quality_status():
 @app.get("/quality/history")
 def get_quality_history(limit: int = 20):
     """
-    Return historical data-quality metric snapshots.
+    Return the latest N historical quality snapshots.
 
-    Default:
-        20 snapshots
+    Results are ordered from oldest to newest.
 
-    Maximum:
-        100 snapshots
+    Example:
+
+        15:00 -> 98%
+        15:01 -> 97%
+        15:02 -> 94%
+        15:03 -> 89%
+        15:04 -> 95%
     """
 
     if limit < 1 or limit > MAX_QUALITY_HISTORY:
@@ -213,10 +245,95 @@ def get_quality_history(limit: int = 20):
     snapshots = quality_history[-limit:]
 
     return {
+        "count": len(snapshots),
         "history": [
             snapshot.to_dict()
             for snapshot in snapshots
-        ]
+        ],
+    }
+
+
+# --------------------------------------------------
+# Latest quality windows
+# --------------------------------------------------
+
+@app.get("/quality/history/latest")
+def get_latest_quality_windows(limit: int = 10):
+    """
+    Return the latest N quality windows.
+
+    This endpoint is intended for the dashboard trend chart.
+    """
+
+    if limit < 1 or limit > MAX_QUALITY_HISTORY:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"limit must be between 1 and "
+                f"{MAX_QUALITY_HISTORY}"
+            ),
+        )
+
+    snapshots = quality_history[-limit:]
+
+    return {
+        "count": len(snapshots),
+        "windows": [
+            snapshot.to_dict()
+            for snapshot in snapshots
+        ],
+    }
+
+
+# --------------------------------------------------
+# Alerts
+# --------------------------------------------------
+
+@app.get("/alerts")
+def get_alerts():
+    """
+    Return recent quality and system alerts.
+    """
+
+    return {
+        "alerts": alert_history
+    }
+
+
+# --------------------------------------------------
+# Data quality profile
+# --------------------------------------------------
+
+@app.get("/quality/profile")
+def get_quality_profile():
+    """
+    Return the current data-quality profile.
+    """
+
+    metrics = quality_metrics.get_metrics()
+
+    profile = build_profile(
+        total_events=metrics["total_events"],
+        valid_events=metrics["valid_events"],
+        invalid_events=metrics["invalid_events"],
+        error_counts=metrics["error_counts"],
+        event_type_counts=profile_event_type_counts,
+        currency_counts=profile_currency_counts,
+    )
+
+    return {
+        "total_events": profile.total_events,
+        "valid_events": profile.valid_events,
+        "invalid_events": profile.invalid_events,
+        "error_counts": profile.error_counts,
+        "error_percentages": calculate_error_percentages(
+            profile.error_counts
+        ),
+        "event_type_counts": profile.event_type_counts,
+        "currency_counts": profile.currency_counts,
+        "top_error": get_top_error(
+            profile.error_counts
+        ),
     }
 
 
@@ -228,14 +345,15 @@ def get_quality_history(limit: int = 20):
 def get_quality_anomaly():
     """
     Detect whether the current quality score is anomalous
-    compared with recent historical quality scores.
+    compared with previous historical quality scores.
     """
 
     metrics = quality_metrics.get_metrics()
+
     current_quality = metrics["quality_score"]
 
-    # Use previous snapshots as the baseline history.
-    # The current score must not be included in its own baseline.
+    # Do not include the current snapshot in its
+    # own anomaly baseline.
     history = [
         snapshot.quality_score
         for snapshot in quality_history[:-1]
@@ -251,7 +369,10 @@ def get_quality_anomaly():
         "severity": result.severity,
         "current_quality": result.current_quality,
         "baseline_quality": result.baseline_quality,
-        "deviation": round(result.deviation, 2),
+        "deviation": round(
+            result.deviation,
+            2,
+        ),
         "reason": result.reason,
     }
 
@@ -262,7 +383,9 @@ def get_quality_anomaly():
 
 @app.get("/system/status")
 def get_system_status():
-    """Return the current infrastructure system status."""
+    """
+    Return current infrastructure status.
+    """
 
     return system_alert_engine.get_system_status()
 
@@ -272,7 +395,9 @@ async def update_system_component(
     component: str,
     payload: dict,
 ):
-    """Update the status of an infrastructure component."""
+    """
+    Update the status of an infrastructure component.
+    """
 
     status = payload.get("status")
 
@@ -301,12 +426,18 @@ async def update_system_component(
         if len(alert_history) > MAX_ALERT_HISTORY:
             alert_history.pop(0)
 
-        await alert_manager.broadcast(alert_data)
+        await alert_manager.broadcast(
+            alert_data
+        )
 
     return {
         "status": status,
         "component": component,
-        "alert": alert.to_dict() if alert else None,
+        "alert": (
+            alert.to_dict()
+            if alert
+            else None
+        ),
     }
 
 
@@ -317,8 +448,9 @@ async def update_system_component(
 @app.post("/events")
 async def process_event(event: dict):
     """
-    Validate an event, update metrics, store historical
-    metrics, broadcast metrics, and generate alerts.
+    Validate an event, update quality metrics,
+    create a historical snapshot, update profiling
+    information, broadcast metrics, and generate alerts.
     """
 
     # --------------------------------------------------
@@ -328,12 +460,40 @@ async def process_event(event: dict):
     result = validate_checkout_event(event)
 
     # --------------------------------------------------
+    # Update data profiling distributions
+    # --------------------------------------------------
+
+    event_type = event.get("event_type")
+    currency = event.get("currency")
+
+    if event_type:
+        profile_event_type_counts[event_type] = (
+            profile_event_type_counts.get(
+                event_type,
+                0,
+            )
+            + 1
+        )
+
+    if currency:
+        profile_currency_counts[currency] = (
+            profile_currency_counts.get(
+                currency,
+                0,
+            )
+            + 1
+        )
+
+    # --------------------------------------------------
     # Update quality metrics
     # --------------------------------------------------
 
     if result["valid"]:
+
         quality_metrics.record_valid()
+
     else:
+
         quality_metrics.record_invalid(
             result["errors"]
         )
@@ -353,7 +513,13 @@ async def process_event(event: dict):
     )
 
     # --------------------------------------------------
-    # Store historical quality snapshot
+    # Create historical quality snapshot
+    #
+    # This timestamp represents the time at which
+    # this metric snapshot was produced.
+    #
+    # Permanent window_start/window_end records are
+    # maintained by the Flink/Iceberg metrics pipeline.
     # --------------------------------------------------
 
     snapshot = QualityMetricSnapshot(
@@ -365,9 +531,12 @@ async def process_event(event: dict):
         invalid_event_rate=metrics["invalid_event_rate"],
     )
 
+    # --------------------------------------------------
+    # Preserve previous snapshots
+    # --------------------------------------------------
+
     quality_history.append(snapshot)
 
-    # Keep only the latest 100 snapshots
     if len(quality_history) > MAX_QUALITY_HISTORY:
         quality_history.pop(0)
 
@@ -376,8 +545,8 @@ async def process_event(event: dict):
     # --------------------------------------------------
 
     anomaly_history = [
-        snapshot.quality_score
-        for snapshot in quality_history[:-1]
+        previous_snapshot.quality_score
+        for previous_snapshot in quality_history[:-1]
     ]
 
     anomaly_result = detect_anomaly(
@@ -391,12 +560,21 @@ async def process_event(event: dict):
 
     metrics_message = {
         "type": "QUALITY_METRICS",
+        "timestamp": datetime.now(
+            timezone.utc
+        ).isoformat(),
+
         "total_events": metrics["total_events"],
         "valid_events": metrics["valid_events"],
         "invalid_events": metrics["invalid_events"],
+
         "quality_score": metrics["quality_score"],
-        "invalid_event_rate": metrics["invalid_event_rate"],
+        "invalid_event_rate": metrics[
+            "invalid_event_rate"
+        ],
+
         "error_counts": metrics["error_counts"],
+
         "status": status,
         "trend": calculate_quality_trend(),
     }
@@ -419,7 +597,7 @@ async def process_event(event: dict):
     )
 
     # --------------------------------------------------
-    # Preserve existing anomaly notification
+    # Broadcast anomaly notification
     # --------------------------------------------------
 
     if anomaly_result.is_anomaly:
@@ -457,33 +635,44 @@ async def process_event(event: dict):
 
     alert = alert_engine.evaluate(
         quality_score=metrics["quality_score"],
-        invalid_event_rate=metrics["invalid_event_rate"],
+        invalid_event_rate=metrics[
+            "invalid_event_rate"
+        ],
     )
 
     if alert is not None:
 
         alert_data = alert.to_dict()
 
-        # Add unique history ID
         alert_data["id"] = (
             f"alert-{len(alert_history) + 1:03d}"
         )
 
-        # Store newest alert
         alert_history.append(alert_data)
 
-        # Keep only the latest alerts
         if len(alert_history) > MAX_ALERT_HISTORY:
             alert_history.pop(0)
 
-        # Broadcast alert
         await alert_manager.broadcast(
             alert_data
         )
 
+    # --------------------------------------------------
+    # Return event result
+    # --------------------------------------------------
+
     return {
         **result,
         "status": status,
+        "metrics": {
+            "total_events": metrics["total_events"],
+            "valid_events": metrics["valid_events"],
+            "invalid_events": metrics["invalid_events"],
+            "quality_score": metrics["quality_score"],
+            "invalid_event_rate": metrics[
+                "invalid_event_rate"
+            ],
+        },
     }
 
 
@@ -495,19 +684,25 @@ async def process_event(event: dict):
 async def websocket_alerts(
     websocket: WebSocket,
 ):
-    """WebSocket endpoint for real-time data-quality messages."""
+    """
+    WebSocket endpoint for real-time
+    data-quality messages.
+    """
 
     await alert_manager.connect(websocket)
 
     try:
 
         while True:
+
             await websocket.receive_text()
 
     except WebSocketDisconnect:
+
         alert_manager.disconnect(websocket)
 
     except Exception:
+
         alert_manager.disconnect(websocket)
 
 
@@ -517,7 +712,9 @@ async def websocket_alerts(
 
 @app.post("/alerts/test")
 async def send_test_alert():
-    """Send a test alert to connected WebSocket clients."""
+    """
+    Send a test alert to connected WebSocket clients.
+    """
 
     alert = {
         "type": "QUALITY_ALERT",
@@ -526,7 +723,9 @@ async def send_test_alert():
         "message": "Test data-quality alert",
     }
 
-    await alert_manager.broadcast(alert)
+    await alert_manager.broadcast(
+        alert
+    )
 
     return {
         "status": "sent",

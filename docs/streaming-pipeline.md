@@ -1421,3 +1421,36 @@ quality_metrics
 | Flink restart with historical data retained | PASS   |
 | Valid events stored in Iceberg              | PASS   |
 | Invalid events routed to                    |        |
+## Day 12 — Quality Anomaly Test Scenarios
+
+### Objective
+
+Added configurable quality anomaly scenarios to the existing checkout event producer to simulate different data-quality patterns for anomaly detection testing.
+
+### Implementation
+
+The existing `producer/producer.py` was extended with:
+
+- `QUALITY_SCENARIO` configuration variable.
+- 60-event scenario windows.
+- Scenario-specific invalid-event rates.
+- Four configurable quality scenarios.
+- Existing Kafka producer and retry logic retained.
+
+Only the `QUALITY_SCENARIO` value needs to be changed to switch between test scenarios.
+
+### Quality Anomaly Scenarios
+
+| Scenario | Expected Quality by Window |
+| -------- | --------------------------- |
+| NORMAL | ~97% continuously |
+| SUDDEN_DROP | 96%, 96%, 96%, 96%, 82% |
+| GRADUAL_DEGRADATION | 98%, 97%, 95%, 93%, 91%, 89% |
+| RECOVERY | 82%, 87%, 91%, 95%, 97% |
+
+### Scenario Configuration
+
+The scenario is selected using:
+
+```python
+QUALITY_SCENARIO = "NORMAL"

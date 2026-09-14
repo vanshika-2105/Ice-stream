@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-
+import time
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -27,6 +27,11 @@ from profiler import (
     build_profile,
     calculate_error_percentages,
     get_top_error,
+)
+
+from pipeline_metrics import (
+    build_pipeline_metrics,
+    pipeline_metrics_to_dict,
 )
 
 
@@ -58,9 +63,17 @@ alert_manager = AlertManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
 
+# Pipeline performance state
+pipeline_start_time = None
+pipeline_elapsed_seconds = 0.0
+pipeline_latencies_ms = []
+pipeline_status = "HEALTHY"
+
 # Data profiling state
 profile_event_type_counts = {}
 profile_currency_counts = {}
+
+
 
 system_alert_engine = SystemAlertEngine()
 circuit_breaker = CircuitBreaker()
@@ -226,6 +239,50 @@ def get_quality_profile():
         "currency_counts": profile.currency_counts,
         "top_error": get_top_error(profile.error_counts),
     }
+    # --------------------------------------------------
+# Pipeline performance metrics
+# --------------------------------------------------
+
+@app.get("/pipeline/metrics")
+def get_pipeline_metrics():
+    """Return current pipeline performance metrics."""
+
+    metrics = quality_metrics.get_metrics()
+
+    pipeline_metrics = build_pipeline_metrics(
+        total_events=metrics["total_events"],
+        valid_events=metrics["valid_events"],
+        invalid_events=metrics["invalid_events"],
+        elapsed_seconds=pipeline_elapsed_seconds,
+        latencies_ms=pipeline_latencies_ms,
+    )
+
+    return pipeline_metrics_to_dict(pipeline_metrics)
+# --------------------------------------------------
+# Pipeline performance status
+# --------------------------------------------------
+
+@app.get("/pipeline/status")
+def get_pipeline_status():
+    """Return a concise pipeline performance status."""
+
+    metrics = quality_metrics.get_metrics()
+
+    pipeline_metrics = build_pipeline_metrics(
+        total_events=metrics["total_events"],
+        valid_events=metrics["valid_events"],
+        invalid_events=metrics["invalid_events"],
+        elapsed_seconds=pipeline_elapsed_seconds,
+        latencies_ms=pipeline_latencies_ms,
+    )
+
+    pipeline_data = pipeline_metrics_to_dict(pipeline_metrics)
+
+    return {
+        "status": pipeline_data["status"],
+        "throughput_eps": pipeline_data["throughput_eps"],
+        "average_latency_ms": pipeline_data["average_latency_ms"],
+    }
 # --------------------------------------------------
 # Historical quality metrics
 # --------------------------------------------------
@@ -358,16 +415,44 @@ async def update_system_component(
 @app.post("/events")
 async def process_event(event: dict):
     """
-    Validate an event, update metrics, store historical
-    metrics, broadcast metrics, and generate alerts.
+    Validate an event, update quality and pipeline metrics,
+    store historical metrics, broadcast metrics, and generate alerts.
     """
+
+    global pipeline_start_time
+    global pipeline_elapsed_seconds
+
+    if pipeline_start_time is None:
+        pipeline_start_time = time.perf_counter()
+
+    event_start_time = time.perf_counter()
 
     # --------------------------------------------------
     # Validate checkout event
     # --------------------------------------------------
 
     result = validate_checkout_event(event)
-        # Update data profiling distributions
+
+    # --------------------------------------------------
+    # Record pipeline latency
+    # --------------------------------------------------
+
+    pipeline_latency_ms = (
+        time.perf_counter() - event_start_time
+    ) * 1000
+
+    pipeline_latencies_ms.append(
+        round(pipeline_latency_ms, 2)
+    )
+
+    pipeline_elapsed_seconds = (
+        time.perf_counter() - pipeline_start_time
+    )
+
+    # --------------------------------------------------
+    # Update data profiling distributions
+    # --------------------------------------------------
+
     event_type = event.get("event_type")
     currency = event.get("currency")
 
@@ -505,7 +590,7 @@ async def process_event(event: dict):
             anomaly_alert
         )
 
-    # --------------------------------------------------
+        # --------------------------------------------------
     # Evaluate quality alert
     # --------------------------------------------------
 
@@ -526,63 +611,108 @@ async def process_event(event: dict):
         # Store newest alert
         alert_history.append(alert_data)
 
-        # Keep only the latest alerts
+        # Keep only the latest 100 alerts
         if len(alert_history) > MAX_ALERT_HISTORY:
             alert_history.pop(0)
 
-        # Broadcast alert
         await alert_manager.broadcast(
             alert_data
         )
+
+    # --------------------------------------------------
+    # Broadcast pipeline performance metrics
+    # --------------------------------------------------
+
+    pipeline_metrics = build_pipeline_metrics(
+        total_events=metrics["total_events"],
+        valid_events=metrics["valid_events"],
+        invalid_events=metrics["invalid_events"],
+        elapsed_seconds=pipeline_elapsed_seconds,
+        latencies_ms=pipeline_latencies_ms,
+    )
+
+    pipeline_data = pipeline_metrics_to_dict(
+        pipeline_metrics
+    )
+
+    current_pipeline_status = pipeline_data["status"]
+
+    pipeline_message = {
+        "type": "PIPELINE_METRICS",
+        "total_events": pipeline_metrics.total_events,
+        "valid_events": pipeline_metrics.valid_events,
+        "invalid_events": pipeline_metrics.invalid_events,
+        "throughput_eps": pipeline_metrics.throughput_eps,
+        "average_latency_ms": pipeline_metrics.average_latency_ms,
+        "dlq_rate": pipeline_metrics.dlq_rate,
+        "status": current_pipeline_status,
+    }
+
+    await alert_manager.broadcast(
+        pipeline_message
+    )
+
+    # --------------------------------------------------
+    # Evaluate pipeline status transition
+    # --------------------------------------------------
+
+    global pipeline_status
+
+    if current_pipeline_status != pipeline_status:
+
+        previous_pipeline_status = pipeline_status
+
+        if current_pipeline_status == "HEALTHY":
+            pipeline_transition = {
+                "type": "PIPELINE_RECOVERY",
+                "previous_status": previous_pipeline_status,
+                "current_status": current_pipeline_status,
+            }
+
+        elif current_pipeline_status == "DEGRADED":
+            pipeline_transition = {
+                "type": "PIPELINE_DEGRADED",
+                "previous_status": previous_pipeline_status,
+                "current_status": current_pipeline_status,
+            }
+
+        elif current_pipeline_status == "CRITICAL":
+            pipeline_transition = {
+                "type": "PIPELINE_CRITICAL",
+                "previous_status": previous_pipeline_status,
+                "current_status": current_pipeline_status,
+            }
+
+        else:
+            pipeline_transition = None
+
+        pipeline_status = current_pipeline_status
+
+        if pipeline_transition is not None:
+            await alert_manager.broadcast(
+                pipeline_transition
+            )
+
+    # --------------------------------------------------
+    # Return event result
+    # --------------------------------------------------
 
     return {
         **result,
         "status": status,
     }
-
-
 # --------------------------------------------------
-# WebSocket
+# WebSocket alerts
 # --------------------------------------------------
 
 @app.websocket("/ws/alerts")
-async def websocket_alerts(
-    websocket: WebSocket,
-):
-    """WebSocket endpoint for real-time data-quality messages."""
+async def websocket_alerts(websocket: WebSocket):
+    """Maintain a WebSocket connection for real-time alerts."""
 
     await alert_manager.connect(websocket)
 
     try:
-
         while True:
             await websocket.receive_text()
-
     except WebSocketDisconnect:
         alert_manager.disconnect(websocket)
-
-    except Exception:
-        alert_manager.disconnect(websocket)
-
-
-# --------------------------------------------------
-# Test alert
-# --------------------------------------------------
-
-@app.post("/alerts/test")
-async def send_test_alert():
-    """Send a test alert to connected WebSocket clients."""
-
-    alert = {
-        "type": "QUALITY_ALERT",
-        "severity": "CRITICAL",
-        "quality_score": 0.0,
-        "message": "Test data-quality alert",
-    }
-
-    await alert_manager.broadcast(alert)
-
-    return {
-        "status": "sent",
-        "alert": alert,
-    }

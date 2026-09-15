@@ -410,3 +410,69 @@ def test_websocket_receives_quality_anomaly():
             anomaly_message["reason"]
             == "Quality dropped significantly below historical baseline"
         )
+def test_websocket_receives_observability_overview():
+    from alert_server.main import (
+        quality_history,
+        quality_metrics,
+        profile_event_type_counts,
+        profile_currency_counts,
+        pipeline_latencies_ms,
+    )
+
+    quality_history.clear()
+
+    quality_metrics.total_events = 0
+    quality_metrics.valid_events = 0
+    quality_metrics.invalid_events = 0
+    quality_metrics.error_counts.clear()
+
+    profile_event_type_counts.clear()
+    profile_currency_counts.clear()
+
+    pipeline_latencies_ms.clear()
+
+    with client.websocket_connect("/ws/alerts") as websocket:
+        response = client.post(
+            "/events",
+            json={
+                "event_id": "ws-overview-evt",
+                "event_type": "checkout",
+                "timestamp": "2026-09-10T13:00:00Z",
+                "order_id": "ws-overview-order",
+                "customer_id": "ws-overview-customer",
+                "product_id": "ws-overview-product",
+                "quantity": 1,
+                "amount": 100,
+                "currency": "INR",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["valid"] is True
+
+        messages = []
+
+        for _ in range(10):
+            message = websocket.receive_json()
+            messages.append(message)
+
+            if message["type"] == "OBSERVABILITY_OVERVIEW":
+                break
+
+        overview_messages = [
+            message
+            for message in messages
+            if message["type"] == "OBSERVABILITY_OVERVIEW"
+        ]
+
+        assert overview_messages
+
+        overview = overview_messages[0]
+
+        assert overview["type"] == "OBSERVABILITY_OVERVIEW"
+        assert "overall_status" in overview
+        assert "quality_score" in overview
+        assert "throughput_eps" in overview
+        assert "average_latency_ms" in overview
+        assert "dlq_rate" in overview
+        assert "is_anomaly" in overview

@@ -41,7 +41,26 @@ app = FastAPI(
     version="0.3.0",
 )
 
+def calculate_overall_status(statuses: list[str]) -> str:
+    """Calculate the overall observability status."""
 
+    normalized_statuses = {
+        status.upper()
+        for status in statuses
+        if status
+    }
+
+    if "CRITICAL" in normalized_statuses:
+        return "CRITICAL"
+
+    if (
+        "DEGRADED" in normalized_statuses
+        or "WARNING" in normalized_statuses
+        or "DOWN" in normalized_statuses
+    ):
+        return "DEGRADED"
+
+    return "HEALTHY"
 # --------------------------------------------------
 # CORS
 # --------------------------------------------------
@@ -407,6 +426,72 @@ async def update_system_component(
         "alert": alert.to_dict() if alert else None,
     }
 
+# --------------------------------------------------
+# Unified observability overview
+# --------------------------------------------------
+
+@app.get("/observability/overview")
+def get_observability_overview():
+    """Return a unified observability view of the platform."""
+
+    quality = get_quality_status()
+    anomaly = get_quality_anomaly()
+    profile = get_quality_profile()
+    pipeline = get_pipeline_metrics()
+    system = get_system_status()
+
+    statuses = [
+        quality["status"],
+        pipeline["status"],
+    ]
+
+    components = system.get("components", {})
+
+    component_statuses = [
+        component.get("status")
+        for component in components.values()
+        if isinstance(component, dict)
+    ]
+
+    # Kafka DOWN is considered CRITICAL because Kafka is
+    # the primary event-ingestion dependency.
+    if components.get("kafka", {}).get("status") == "DOWN":
+        statuses.append("CRITICAL")
+    else:
+        statuses.extend(
+            status
+            for status in component_statuses
+            if status
+        )
+
+    overall_status = calculate_overall_status(statuses)
+
+    return {
+        "quality": {
+            "quality_score": quality["quality_score"],
+            "status": quality["status"],
+            "valid_events": quality["valid_events"],
+            "invalid_events": quality["invalid_events"],
+        },
+        "anomaly": {
+            "is_anomaly": anomaly["is_anomaly"],
+            "severity": anomaly["severity"],
+            "deviation": anomaly["deviation"],
+        },
+        "profile": {
+            "top_error": profile["top_error"],
+            "error_counts": profile["error_counts"],
+        },
+        "pipeline": {
+            "total_events": pipeline["total_events"],
+            "throughput_eps": pipeline["throughput_eps"],
+            "average_latency_ms": pipeline["average_latency_ms"],
+            "dlq_rate": pipeline["dlq_rate"],
+            "status": pipeline["status"],
+        },
+        "system": system,
+        "overall_status": overall_status,
+    }
 
 # --------------------------------------------------
 # Event processing
@@ -523,7 +608,6 @@ async def process_event(event: dict):
         current_quality=metrics["quality_score"],
         history=anomaly_history,
     )
-
     # --------------------------------------------------
     # Broadcast current quality metrics
     # --------------------------------------------------
@@ -590,7 +674,7 @@ async def process_event(event: dict):
             anomaly_alert
         )
 
-        # --------------------------------------------------
+    # --------------------------------------------------
     # Evaluate quality alert
     # --------------------------------------------------
 
@@ -620,7 +704,7 @@ async def process_event(event: dict):
         )
 
     # --------------------------------------------------
-    # Broadcast pipeline performance metrics
+    # Build pipeline performance metrics
     # --------------------------------------------------
 
     pipeline_metrics = build_pipeline_metrics(
@@ -693,6 +777,25 @@ async def process_event(event: dict):
                 pipeline_transition
             )
 
+    # --------------------------------------------------
+    # Broadcast unified observability overview
+    # --------------------------------------------------
+
+    overview = get_observability_overview()
+
+    overview_message = {
+        "type": "OBSERVABILITY_OVERVIEW",
+        "overall_status": overview["overall_status"],
+        "quality_score": overview["quality"]["quality_score"],
+        "throughput_eps": overview["pipeline"]["throughput_eps"],
+        "average_latency_ms": overview["pipeline"]["average_latency_ms"],
+        "dlq_rate": overview["pipeline"]["dlq_rate"],
+        "is_anomaly": overview["anomaly"]["is_anomaly"],
+    }
+
+    await alert_manager.broadcast(
+        overview_message
+    )
     # --------------------------------------------------
     # Return event result
     # --------------------------------------------------

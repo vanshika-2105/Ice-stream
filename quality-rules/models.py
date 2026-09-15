@@ -296,3 +296,11 @@ def validate_checkout_event(event: dict) -> dict:
         "event_id": event_id if isinstance(event_id, str) else None,
         "errors": errors,
     }
+@dataclass
+class ObservabilityOverview:
+    quality: dict[str, Any]
+    anomaly: dict[str, Any]
+    profile: dict[str, Any]
+    pipeline: dict[str, Any]
+    system: dict[str, Any]
+    overall_status: str

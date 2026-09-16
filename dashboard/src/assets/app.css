@@ -1,0 +1,314 @@
+  * {
+  box-sizing:border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f4f6f8;
+  color: #222;
+}
+
+.app {
+  min-height: 100vh;
+  padding: 25px;
+  background: #f4f6f8;
+}
+
+.app h1,
+.app h2,
+.app h3,
+.app p {
+  color: #222;
+}
+
+.app > * {
+  margin-bottom: 20px;
+}
+
+/* Header */
+header {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 32px;
+  color: #1f2937;
+}
+
+header p {
+  color: #555;
+}
+
+/* Pipeline */
+.pipeline-section {
+  background: white;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.pipeline-section h2 {
+  margin-top: 0;
+}
+
+.pipeline-container {
+  width: 100%;
+  height: 300px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+/* Metrics */
+.metrics-container {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 15px;
+}
+
+.metrics-card {
+  background: white;
+  padding: 20px;
+  border-radius: 10px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.metrics-card h3 {
+  color: #555;
+}
+
+.metrics-card p {
+  font-size: 28px;
+  font-weight: bold;
+  color: #111;
+}
+
+/* Quality */
+.quality-score {
+  background: white;
+  padding: 25px;
+  border-radius: 10px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.quality-score h2 {
+  margin-bottom: 10px;
+}
+
+.quality-score .score {
+  font-size: 40px;
+  font-weight: bold;
+}
+
+/* WebSocket */
+.websocket-card,
+.alert-panel,
+.status-card,
+.error-statistics,
+.top-error,
+.invalid-event-rate {
+  background: white;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.websocket-card p,
+.alert-panel p {
+  color: #333;
+}
+
+/* Alerts */
+.alert-panel {
+  margin-bottom: 30px;
+}
+
+.current-alert {
+  padding: 15px;
+  border-radius: 8px;
+  background: #fff3cd;
+  border-left: 5px solid #f0ad4e;
+}
+
+.alert-history-item {
+  padding: 12px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #ddd;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .metrics-container {
+    grid-template-columns: 1fr;
+  }
+}
+/* Quality Trend */
+
+.quality-trend {
+  margin-top: 20px;
+  padding: 20px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #ddd;
+}
+
+.quality-trend-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.quality-trend-header h2 {
+  margin: 0;
+}
+
+.trend-indicator {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.trend-indicator.up {
+  background: #d4edda;
+  color: #155724;
+}
+
+.trend-indicator.down {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.trend-indicator.stable {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.quality-chart-wrapper {
+  position: relative;
+  width: 100%;
+  height: 300px;
+}
+
+.quality-chart {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.chart-label {
+  position: absolute;
+  left: 0;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.chart-label.top {
+  top: 0;
+}
+
+.chart-label.middle {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.chart-label.bottom {
+  bottom: 0;
+}
+
+.quality-history {
+  display: flex;
+  gap: 10px;
+  margin-top: 15px;
+  overflow-x: auto;
+}
+
+.quality-point {
+  min-width: 80px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f5f5f5;
+  text-align: center;
+}
+
+.quality-point strong {
+  display: block;
+  font-size: 16px;
+}
+
+.quality-point span {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+}
+/* =========================
+   QUALITY ANOMALY
+   ========================= */
+
+.quality-anomaly {
+  margin-top: 20px;
+  padding: 20px;
+  border-radius: 12px;
+  background: #fff5f5;
+  border: 2px solid #dc3545;
+}
+
+.quality-anomaly-header {
+  margin-bottom: 15px;
+}
+
+.quality-anomaly-header h2 {
+  margin: 0;
+  color: #b02a37;
+  font-size: 20px;
+}
+
+.anomaly-details {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.anomaly-item {
+  padding: 15px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #f1b0b7;
+  text-align: center;
+}
+
+.anomaly-item strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.anomaly-item span {
+  display: block;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.anomaly-reason {
+  padding: 12px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #f1b0b7;
+  font-size: 14px;
+}
+
+/* =========================
+   RESPONSIVE ANOMALY CARD
+   ========================= */
+
+@media (max-width: 768px) {
+  .anomaly-details {
+    grid-template-columns: 1fr;
+  }
+}

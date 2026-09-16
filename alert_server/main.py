@@ -33,8 +33,10 @@ from pipeline_metrics import (
     build_pipeline_metrics,
     pipeline_metrics_to_dict,
 )
-
-
+from live_aggregator import LiveAggregator
+# Live metrics broadcast state
+last_live_metrics_broadcast = 0.0
+LIVE_METRICS_INTERVAL_SECONDS = 1.0
 app = FastAPI(
     title="Ice-Stream Alert Server",
     description="Backend service for streaming data quality alerts",
@@ -81,6 +83,7 @@ app.add_middleware(
 alert_manager = AlertManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
+live_aggregator = LiveAggregator()
 
 # Pipeline performance state
 pipeline_start_time = None
@@ -379,9 +382,16 @@ def get_quality_anomaly():
 
 @app.get("/system/status")
 def get_system_status():
-    """Return the current infrastructure system status."""
+    """Return the current infrastructure and WebSocket system status."""
 
-    return system_alert_engine.get_system_status()
+    status = system_alert_engine.get_system_status()
+
+    status["websocket"] = {
+        "status": alert_manager.get_connection_state(),
+        "connected_clients": len(alert_manager.clients),
+    }
+
+    return status
 
 
 @app.post("/system/components/{component}")
@@ -425,7 +435,27 @@ async def update_system_component(
         "component": component,
         "alert": alert.to_dict() if alert else None,
     }
+@app.get("/observability/live")
+def get_live_observability():
+    """Return the latest rolling live streaming metrics."""
 
+    metrics = live_aggregator.get_metrics()
+
+    return {
+        "status": metrics.status,
+        "total_events": metrics.total_events,
+        "valid_events": metrics.valid_events,
+        "invalid_events": metrics.invalid_events,
+        "throughput_eps": metrics.throughput_eps,
+        "average_latency_ms": metrics.average_latency_ms,
+        "dlq_rate": metrics.dlq_rate,
+        "quality_percentage": metrics.quality_percentage,
+        "last_event_time": (
+            metrics.last_event_time.isoformat()
+            if metrics.last_event_time
+            else None
+        ),
+    }
 # --------------------------------------------------
 # Unified observability overview
 # --------------------------------------------------
@@ -528,6 +558,15 @@ async def process_event(event: dict):
 
     pipeline_latencies_ms.append(
         round(pipeline_latency_ms, 2)
+    )
+        # --------------------------------------------------
+    # Update live streaming metrics
+    # --------------------------------------------------
+
+    live_aggregator.record_event(
+        valid=result["valid"],
+        latency_ms=pipeline_latency_ms,
+        event_time=datetime.now(timezone.utc),
     )
 
     pipeline_elapsed_seconds = (
@@ -782,7 +821,42 @@ async def process_event(event: dict):
     # --------------------------------------------------
 
     overview = get_observability_overview()
+        # --------------------------------------------------
+    # Broadcast throttled live metrics
+    # --------------------------------------------------
 
+    global last_live_metrics_broadcast
+
+    current_time = time.monotonic()
+
+    if (
+        current_time - last_live_metrics_broadcast
+        >= LIVE_METRICS_INTERVAL_SECONDS
+    ):
+        live_metrics = live_aggregator.get_metrics()
+
+        live_metrics_message = {
+            "type": "LIVE_METRICS",
+            "timestamp": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "data": {
+                "total_events": live_metrics.total_events,
+                "valid_events": live_metrics.valid_events,
+                "invalid_events": live_metrics.invalid_events,
+                "throughput_eps": live_metrics.throughput_eps,
+                "average_latency_ms": live_metrics.average_latency_ms,
+                "dlq_rate": live_metrics.dlq_rate,
+                "quality_percentage": live_metrics.quality_percentage,
+                "stream_status": live_metrics.status,
+            },
+        }
+
+        await alert_manager.broadcast(
+            live_metrics_message
+        )
+
+        last_live_metrics_broadcast = current_time
     overview_message = {
         "type": "OBSERVABILITY_OVERVIEW",
         "overall_status": overview["overall_status"],
@@ -819,3 +893,7 @@ async def websocket_alerts(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         alert_manager.disconnect(websocket)
+# --------------------------------------------------
+# WebSocket alerts
+# --------------------------------------------------
+

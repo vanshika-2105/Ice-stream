@@ -1,34 +1,36 @@
 import json
-import os
 import random
 import time
 from datetime import datetime, timezone
 
 from kafka import KafkaProducer
-from kafka.errors import KafkaTimeoutError, KafkaError
+from kafka.errors import KafkaError, KafkaTimeoutError
+
+
+# ============================================================
+# Ice-Stream Day 13 Anomaly Scenario Producer
+# ============================================================
+
+print("=" * 60)
+print("Ice-Stream Day 13 Anomaly Scenario Producer")
+print("=" * 60)
 
 
 # ============================================================
 # Kafka configuration
 # ============================================================
 
-KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
-TOPIC = os.getenv("KAFKA_TOPIC", "checkout-events")
+KAFKA_BROKER = "localhost:9092"
+KAFKA_TOPIC = "checkout-events"
+
+EVENT_INTERVAL = 1.0
+
+MAX_RETRIES = 5
+RETRY_DELAY = 3
 
 
 # ============================================================
-# Day 8 simulation configuration
-# ============================================================
-
-EVENT_INTERVAL = float(os.getenv("EVENT_INTERVAL", "1"))
-
-# Kept for backward compatibility with the existing producer.
-# Day 12 scenarios determine the actual invalid-event rate.
-INVALID_EVENT_RATE = float(os.getenv("INVALID_EVENT_RATE", "0.10"))
-
-
-# ============================================================
-# Day 12 anomaly scenario configuration
+# Day 13 anomaly scenario configuration
 # ============================================================
 
 # Change ONLY this value to test a different quality scenario.
@@ -39,32 +41,17 @@ INVALID_EVENT_RATE = float(os.getenv("INVALID_EVENT_RATE", "0.10"))
 # GRADUAL_DEGRADATION
 # RECOVERY
 
-QUALITY_SCENARIO = "NORMAL"
+QUALITY_SCENARIO = "SUDDEN_DROP"
 
-
-# Number of events used to represent one quality window.
-# With EVENT_INTERVAL = 1 second, 60 events ≈ 1 minute.
+# Number of events in each scenario window.
 WINDOW_SIZE = 60
 
-
-# Invalid-event rates for each scenario.
-#
-# NORMAL:
-#       ~97% quality
-#
-# SUDDEN_DROP:
-#       96%, 96%, 96%, 96%, 82%
-#
-# GRADUAL_DEGRADATION:
-#       98%, 97%, 95%, 93%, 91%, 89%
-#
-# RECOVERY:
-#       82%, 87%, 91%, 95%, 97%
 
 SCENARIO_RATES = {
     "NORMAL": [
         0.03
     ],
+
     "SUDDEN_DROP": [
         0.04,
         0.04,
@@ -72,6 +59,7 @@ SCENARIO_RATES = {
         0.04,
         0.18
     ],
+
     "GRADUAL_DEGRADATION": [
         0.02,
         0.03,
@@ -80,6 +68,7 @@ SCENARIO_RATES = {
         0.09,
         0.11
     ],
+
     "RECOVERY": [
         0.18,
         0.13,
@@ -91,80 +80,61 @@ SCENARIO_RATES = {
 
 
 # ============================================================
-# Day 10 reliability configuration
+# Scenario validation
 # ============================================================
-
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
-RETRY_DELAY = float(os.getenv("RETRY_DELAY", "3"))
-
-
-# ============================================================
-# Validate configuration
-# ============================================================
-
-if EVENT_INTERVAL <= 0:
-    raise ValueError("EVENT_INTERVAL must be greater than 0")
-
-if not 0 <= INVALID_EVENT_RATE <= 1:
-    raise ValueError("INVALID_EVENT_RATE must be between 0 and 1")
 
 if QUALITY_SCENARIO not in SCENARIO_RATES:
     raise ValueError(
-        f"Invalid QUALITY_SCENARIO: {QUALITY_SCENARIO}. "
-        f"Choose from: {list(SCENARIO_RATES.keys())}"
+        f"Unknown QUALITY_SCENARIO: {QUALITY_SCENARIO}"
     )
-
-if WINDOW_SIZE <= 0:
-    raise ValueError("WINDOW_SIZE must be greater than 0")
-
-if MAX_RETRIES <= 0:
-    raise ValueError("MAX_RETRIES must be greater than 0")
-
-if RETRY_DELAY <= 0:
-    raise ValueError("RETRY_DELAY must be greater than 0")
 
 
 # ============================================================
-# Create Kafka producer
+# Kafka producer
 # ============================================================
 
 producer = KafkaProducer(
     bootstrap_servers=KAFKA_BROKER,
-    value_serializer=lambda value: json.dumps(value).encode("utf-8")
+    value_serializer=lambda value: json.dumps(value).encode("utf-8"),
+    retries=0
 )
 
 
 # ============================================================
-# Day 12 scenario logic
+# Scenario helper functions
 # ============================================================
+
+def get_current_window(event_number):
+    """
+    Return the 1-based scenario window number.
+    """
+
+    return ((event_number - 1) // WINDOW_SIZE) + 1
+
 
 def get_invalid_event_rate(event_number):
     """
-    Return the invalid-event rate for the current
-    Day 12 quality scenario and event window.
+    Return the invalid-event rate for the current scenario window.
     """
 
     rates = SCENARIO_RATES[QUALITY_SCENARIO]
 
-    # NORMAL uses the same quality level continuously.
-    if QUALITY_SCENARIO == "NORMAL":
-        return rates[0]
-
-    # Determine which scenario window the event belongs to.
     window_number = (event_number - 1) // WINDOW_SIZE
 
-    # Once the scenario reaches its final window,
-    # keep using the final rate.
     if window_number >= len(rates):
         window_number = len(rates) - 1
 
     return rates[window_number]
 
 
-def get_current_window(event_number):
-    """Return the current one-based scenario window number."""
+def get_expected_quality(event_number):
+    """
+    Return expected quality percentage.
+    """
 
-    return ((event_number - 1) // WINDOW_SIZE) + 1
+    invalid_rate = get_invalid_event_rate(event_number)
+
+    return (1 - invalid_rate) * 100
 
 
 # ============================================================
@@ -172,51 +142,58 @@ def get_current_window(event_number):
 # ============================================================
 
 def generate_checkout_event(event_number):
-    """Generate a valid or intentionally invalid checkout event."""
+    """
+    Generate one checkout event.
+
+    Returns:
+        event
+        is_valid
+        invalid_type
+    """
+
+    invalid_rate = get_invalid_event_rate(event_number)
+
+    event_id = f"evt_{event_number:03d}"
 
     event = {
-        "event_id": f"evt_{event_number:03d}",
+        "event_id": event_id,
         "event_type": "checkout",
-        "timestamp": datetime.now(timezone.utc).isoformat().replace(
-            "+00:00",
-            "Z"
-        ),
-        "order_id": f"ORD_{event_number:03d}",
-        "customer_id": f"CUS_{random.randint(1, 100):03d}",
-        "product_id": f"PROD_{random.randint(1, 50):03d}",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "order_id": f"ord_{event_number:04d}",
+        "customer_id": f"cust_{random.randint(1, 300):03d}",
+        "product_id": f"prod_{random.randint(1, 100):03d}",
         "quantity": random.randint(1, 5),
         "amount": round(random.uniform(100, 5000), 2),
-        "currency": "INR"
+        "currency": random.choice(
+            ["INR", "USD", "EUR", "GBP"]
+        )
     }
 
-    # Day 12:
-    # Determine invalid-event probability from the selected scenario.
-    invalid_event_rate = get_invalid_event_rate(event_number)
+    is_invalid = random.random() < invalid_rate
 
-    if random.random() < invalid_event_rate:
+    if not is_invalid:
+        return event, True, None
 
-        invalid_type = random.choice([
-            "missing_customer",
-            "zero_quantity",
-            "negative_amount",
-            "invalid_currency"
-        ])
+    invalid_type = random.choice([
+        "missing_customer",
+        "zero_quantity",
+        "negative_amount",
+        "invalid_currency"
+    ])
 
-        if invalid_type == "missing_customer":
-            del event["customer_id"]
+    if invalid_type == "missing_customer":
+        event["customer_id"] = None
 
-        elif invalid_type == "zero_quantity":
-            event["quantity"] = 0
+    elif invalid_type == "zero_quantity":
+        event["quantity"] = 0
 
-        elif invalid_type == "negative_amount":
-            event["amount"] = -100.00
+    elif invalid_type == "negative_amount":
+        event["amount"] = -abs(event["amount"])
 
-        elif invalid_type == "invalid_currency":
-            event["currency"] = "XYZ"
+    elif invalid_type == "invalid_currency":
+        event["currency"] = "XYZ"
 
-        return event, False, invalid_type
-
-    return event, True, None
+    return event, False, invalid_type
 
 
 # ============================================================
@@ -224,129 +201,162 @@ def generate_checkout_event(event_number):
 # ============================================================
 
 def send_event_with_retry(event):
-    """Send an event to Kafka with retry handling."""
+    """
+    Send one event to Kafka with retry handling.
+    """
 
     for attempt in range(1, MAX_RETRIES + 1):
 
         try:
             future = producer.send(
-                TOPIC,
+                KAFKA_TOPIC,
                 value=event
             )
 
             future.get(timeout=10)
 
-            if attempt > 1:
-                print("[INFO] Kafka connection restored")
-                print("[INFO] Producer resumed")
-
             return True
 
         except (KafkaTimeoutError, KafkaError) as error:
 
-            print(f"[ERROR] Kafka unavailable: {error}")
+            print(
+                f"[WARN] Kafka send failed "
+                f"(attempt {attempt}/{MAX_RETRIES}): {error}"
+            )
 
             if attempt < MAX_RETRIES:
 
                 print(
-                    f"[INFO] Retrying connection... "
-                    f"attempt {attempt}/{MAX_RETRIES}"
+                    f"[INFO] Retrying in {RETRY_DELAY} second(s)..."
                 )
 
                 time.sleep(RETRY_DELAY)
 
             else:
 
-                print("[ERROR] Maximum retry attempts reached.")
+                print(
+                    "[ERROR] Maximum retries reached. "
+                    "Event was not sent."
+                )
 
     return False
 
 
 # ============================================================
-# Main producer
+# Main producer loop
 # ============================================================
 
 def main():
 
-    event_number = 1
+    # Continue from event 269 because events 001-268
+    # were already generated during the previous run.
+    event_number = 269
 
-    initial_invalid_rate = get_invalid_event_rate(1)
-
-    invalid_percentage = initial_invalid_rate * 100
-    valid_percentage = 100 - invalid_percentage
-
-    print("=" * 60)
-    print("Ice-Stream Day 12 Anomaly Scenario Producer")
-    print("=" * 60)
+    initial_invalid_rate = get_invalid_event_rate(event_number)
 
     print(f"[INFO] Kafka broker: {KAFKA_BROKER}")
-    print(f"[INFO] Kafka topic: {TOPIC}")
+    print(f"[INFO] Kafka topic: {KAFKA_TOPIC}")
     print(f"[INFO] Event interval: {EVENT_INTERVAL} second(s)")
     print(f"[INFO] Quality scenario: {QUALITY_SCENARIO}")
-    print(f"[INFO] Scenario window size: {WINDOW_SIZE} events")
-
+    print(f"[INFO] Window size: {WINDOW_SIZE} events")
     print(
-        f"[INFO] Initial quality distribution: "
-        f"{valid_percentage:.1f}% valid / "
-        f"{invalid_percentage:.1f}% invalid"
+        f"[INFO] Starting event number: {event_number}"
     )
+    print(
+        f"[INFO] Starting expected quality: "
+        f"{(1 - initial_invalid_rate) * 100:.0f}%"
+    )
+    print(
+        f"[INFO] Starting expected invalid rate: "
+        f"{initial_invalid_rate * 100:.0f}%"
+    )
+    print("[INFO] Continuing SUDDEN_DROP anomaly window...")
+    print("-" * 60)
 
-    print(f"[INFO] Maximum retries: {MAX_RETRIES}")
-    print(f"[INFO] Retry delay: {RETRY_DELAY} second(s)")
-    print("[INFO] Producer mode: CONTINUOUS")
-    print("[INFO] Press Ctrl+C to stop.")
-    print("=" * 60)
+    current_window = None
 
     try:
 
         while True:
 
-            # Display a message when a new scenario window starts.
-            if (event_number - 1) % WINDOW_SIZE == 0:
+            # Stop after event 300.
+            if event_number > 300:
 
-                current_window = get_current_window(event_number)
-                current_invalid_rate = get_invalid_event_rate(event_number)
-
-                current_invalid_percentage = current_invalid_rate * 100
-                current_valid_percentage = 100 - current_invalid_percentage
-
+                print("-" * 60)
                 print(
-                    f"[SCENARIO] Window {current_window} | "
-                    f"Expected quality: "
-                    f"{current_valid_percentage:.1f}% | "
-                    f"Invalid rate: "
-                    f"{current_invalid_percentage:.1f}%"
+                    "[INFO] Completed events 269-300."
+                )
+                print(
+                    "[INFO] SUDDEN_DROP anomaly window 5 "
+                    "is now complete across both runs "
+                    "(events 241-300)."
+                )
+                break
+
+            window_number = get_current_window(event_number)
+
+            if window_number != current_window:
+
+                current_window = window_number
+
+                invalid_rate = get_invalid_event_rate(
+                    event_number
                 )
 
-            event, is_valid, invalid_type = generate_checkout_event(
-                event_number
+                expected_quality = get_expected_quality(
+                    event_number
+                )
+
+                window_start = (
+                    (window_number - 1) * WINDOW_SIZE
+                ) + 1
+
+                window_end = (
+                    window_number * WINDOW_SIZE
+                )
+
+                print(
+                    f"[INFO] Window {window_number}: "
+                    f"events {window_start}-{window_end}"
+                )
+
+                print(
+                    f"[INFO] Expected quality: "
+                    f"{expected_quality:.0f}%"
+                )
+
+                print(
+                    f"[INFO] Expected invalid rate: "
+                    f"{invalid_rate * 100:.0f}%"
+                )
+
+            event, is_valid, invalid_type = (
+                generate_checkout_event(event_number)
             )
 
             send_success = send_event_with_retry(event)
 
-            if not send_success:
+            if send_success:
 
-                print(
-                    f"[ERROR] Failed to send event "
-                    f"{event['event_id']} after retries."
-                )
+                if is_valid:
 
-                time.sleep(RETRY_DELAY)
-                continue
+                    print(
+                        f"[OK] {event['event_id']} "
+                        f"valid"
+                    )
 
-            if is_valid:
+                else:
 
-                print(
-                    f"[INFO] Event sent successfully: "
-                    f"{event['event_id']} | VALID"
-                )
+                    print(
+                        f"[INVALID] {event['event_id']} "
+                        f"{invalid_type}"
+                    )
 
             else:
 
                 print(
-                    f"[WARN] Event sent: "
-                    f"{event['event_id']} | "
-                    f"INVALID | Reason: {invalid_type}"
+                    f"[ERROR] Failed to send "
+                    f"{event['event_id']}"
                 )
 
             event_number += 1
@@ -355,12 +365,8 @@ def main():
 
     except KeyboardInterrupt:
 
-        print("\n[INFO] Producer stopped by user.")
-
-    except Exception as error:
-
-        print(f"[ERROR] Producer stopped unexpectedly: {error}")
-        raise
+        print()
+        print("[INFO] Producer stopped by user.")
 
     finally:
 
@@ -369,6 +375,10 @@ def main():
 
         print("[INFO] Kafka producer closed.")
 
+
+# ============================================================
+# Entry point
+# ============================================================
 
 if __name__ == "__main__":
     main()

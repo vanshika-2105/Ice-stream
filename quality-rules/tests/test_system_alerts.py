@@ -16,6 +16,7 @@ def test_system_alert_on_component_failure():
 
     assert data["type"] == "SYSTEM_ALERT"
     assert data["severity"] == "CRITICAL"
+    assert data["status"] == "FAILED"
     assert data["component"] == "kafka"
     assert data["message"] == "Kafka connection unavailable"
     assert "timestamp" in data
@@ -37,6 +38,8 @@ def test_system_recovery_on_component_restore():
     data = alert.to_dict()
 
     assert data["type"] == "SYSTEM_RECOVERY"
+    assert data["severity"] == "INFO"
+    assert data["status"] == "RECOVERED"
     assert data["component"] == "kafka"
     assert data["message"] == "Kafka connection restored"
     assert "timestamp" in data

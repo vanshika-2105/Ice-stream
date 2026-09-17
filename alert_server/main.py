@@ -33,6 +33,14 @@ from pipeline_metrics import (
     build_pipeline_metrics,
     pipeline_metrics_to_dict,
 )
+from health_checks import (
+    check_kafka,
+    check_producer,
+    check_flink,
+    check_backend,
+    check_websocket,
+    check_iceberg,
+)
 from live_aggregator import LiveAggregator
 # Live metrics broadcast state
 last_live_metrics_broadcast = 0.0
@@ -52,13 +60,19 @@ def calculate_overall_status(statuses: list[str]) -> str:
         if status
     }
 
-    if "CRITICAL" in normalized_statuses:
+    # Failed/critical components make the whole system critical.
+    if (
+        "CRITICAL" in normalized_statuses
+        or "FAILED" in normalized_statuses
+    ):
         return "CRITICAL"
 
+    # Degraded or recovering components make the system degraded.
     if (
         "DEGRADED" in normalized_statuses
         or "WARNING" in normalized_statuses
         or "DOWN" in normalized_statuses
+        or "RECOVERING" in normalized_statuses
     ):
         return "DEGRADED"
 
@@ -375,14 +389,55 @@ def get_quality_anomaly():
         "reason": result.reason,
     }
 
+def get_component_health():
+    """Return health checks for all known platform components."""
 
+    system_components = system_alert_engine.component_status
+
+    kafka_health = check_kafka(
+        system_components.get("kafka")
+    )
+
+    producer_health = check_producer(
+        live_aggregator.last_event_time
+    )
+
+    flink_health = check_flink(None)
+
+    backend_health = check_backend()
+
+    websocket_health = check_websocket(
+        alert_manager.get_connection_state()
+    )
+
+    iceberg_health = check_iceberg(
+        system_components.get("iceberg")
+    )
+
+    health_results = [
+        kafka_health,
+        flink_health,
+        producer_health,
+        backend_health,
+        websocket_health,
+        iceberg_health,
+    ]
+
+    return {
+        health.component: {
+            "status": health.status,
+            "message": health.message,
+            "checked_at": health.checked_at.isoformat(),
+        }
+        for health in health_results
+    }
 # --------------------------------------------------
 # System status
 # --------------------------------------------------
 
 @app.get("/system/status")
 def get_system_status():
-    """Return the current infrastructure and WebSocket system status."""
+    """Return the current infrastructure and component health status."""
 
     status = system_alert_engine.get_system_status()
 
@@ -390,6 +445,8 @@ def get_system_status():
         "status": alert_manager.get_connection_state(),
         "connected_clients": len(alert_manager.clients),
     }
+
+    status["health"] = get_component_health()
 
     return status
 

@@ -3,7 +3,7 @@
     <section className="alert-history">
       <h2>Alert History</h2>
 
-      {alerts.length === 0 ? (
+      {alerts.length === 0? (
         <p>No alert history</p>
       ) : (
         <div className="alert-history-list">

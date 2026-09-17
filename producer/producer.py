@@ -8,11 +8,11 @@ from kafka.errors import KafkaError, KafkaTimeoutError
 
 
 # ============================================================
-# Ice-Stream Day 13 Anomaly Scenario Producer
+# Ice-Stream Data Profiling Scenario Producer - Day 14
 # ============================================================
 
 print("=" * 60)
-print("Ice-Stream Day 13 Anomaly Scenario Producer")
+print("Ice-Stream Data Profiling Scenario Producer")
 print("=" * 60)
 
 
@@ -30,60 +30,37 @@ RETRY_DELAY = 3
 
 
 # ============================================================
-# Day 13 anomaly scenario configuration
+# Day 14 scenario configuration
 # ============================================================
 
-# Change ONLY this value to test a different quality scenario.
-#
 # Available scenarios:
+#
 # NORMAL
-# SUDDEN_DROP
-# GRADUAL_DEGRADATION
-# RECOVERY
+# MISSING_FIELDS
+# BAD_QUANTITY
+# BAD_AMOUNT
+# BAD_CURRENCY
+# MIXED_ERRORS
 
-QUALITY_SCENARIO = "SUDDEN_DROP"
+QUALITY_SCENARIO = "MIXED_ERRORS"
 
-# Number of events in each scenario window.
-WINDOW_SIZE = 60
-
-
-SCENARIO_RATES = {
-    "NORMAL": [
-        0.03
-    ],
-
-    "SUDDEN_DROP": [
-        0.04,
-        0.04,
-        0.04,
-        0.04,
-        0.18
-    ],
-
-    "GRADUAL_DEGRADATION": [
-        0.02,
-        0.03,
-        0.05,
-        0.07,
-        0.09,
-        0.11
-    ],
-
-    "RECOVERY": [
-        0.18,
-        0.13,
-        0.09,
-        0.05,
-        0.03
-    ]
-}
+TOTAL_EVENTS = 100
 
 
 # ============================================================
 # Scenario validation
 # ============================================================
 
-if QUALITY_SCENARIO not in SCENARIO_RATES:
+VALID_SCENARIOS = {
+    "NORMAL",
+    "MISSING_FIELDS",
+    "BAD_QUANTITY",
+    "BAD_AMOUNT",
+    "BAD_CURRENCY",
+    "MIXED_ERRORS",
+}
+
+if QUALITY_SCENARIO not in VALID_SCENARIOS:
     raise ValueError(
         f"Unknown QUALITY_SCENARIO: {QUALITY_SCENARIO}"
     )
@@ -101,62 +78,12 @@ producer = KafkaProducer(
 
 
 # ============================================================
-# Scenario helper functions
+# Base checkout event
 # ============================================================
 
-def get_current_window(event_number):
-    """
-    Return the 1-based scenario window number.
-    """
-
-    return ((event_number - 1) // WINDOW_SIZE) + 1
-
-
-def get_invalid_event_rate(event_number):
-    """
-    Return the invalid-event rate for the current scenario window.
-    """
-
-    rates = SCENARIO_RATES[QUALITY_SCENARIO]
-
-    window_number = (event_number - 1) // WINDOW_SIZE
-
-    if window_number >= len(rates):
-        window_number = len(rates) - 1
-
-    return rates[window_number]
-
-
-def get_expected_quality(event_number):
-    """
-    Return expected quality percentage.
-    """
-
-    invalid_rate = get_invalid_event_rate(event_number)
-
-    return (1 - invalid_rate) * 100
-
-
-# ============================================================
-# Checkout event generation
-# ============================================================
-
-def generate_checkout_event(event_number):
-    """
-    Generate one checkout event.
-
-    Returns:
-        event
-        is_valid
-        invalid_type
-    """
-
-    invalid_rate = get_invalid_event_rate(event_number)
-
-    event_id = f"evt_{event_number:03d}"
-
-    event = {
-        "event_id": event_id,
+def create_base_event(event_number):
+    return {
+        "event_id": f"evt_{event_number:03d}",
         "event_type": "checkout",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "order_id": f"ord_{event_number:04d}",
@@ -166,34 +93,266 @@ def generate_checkout_event(event_number):
         "amount": round(random.uniform(100, 5000), 2),
         "currency": random.choice(
             ["INR", "USD", "EUR", "GBP"]
-        )
+        ),
     }
 
-    is_invalid = random.random() < invalid_rate
 
-    if not is_invalid:
+# ============================================================
+# Missing field scenario
+# ============================================================
+
+def apply_missing_fields(event, event_number):
+    fields = [
+        "event_id",
+        "quantity",
+        "amount",
+        "currency",
+    ]
+
+    field_to_remove = fields[
+        (event_number - 1) % len(fields)
+    ]
+
+    del event[field_to_remove]
+
+    return event, f"missing_{field_to_remove}"
+
+
+# ============================================================
+# Bad quantity scenario
+# ============================================================
+
+def apply_bad_quantity(event, event_number):
+    bad_values = [
+        0,
+        -5,
+        "ten",
+    ]
+
+    value = bad_values[
+        (event_number - 1) % len(bad_values)
+    ]
+
+    event["quantity"] = value
+
+    return event, f"quantity_{repr(value)}"
+
+
+# ============================================================
+# Bad amount scenario
+# ============================================================
+
+def apply_bad_amount(event, event_number):
+    bad_values = [
+        -10,
+        "abc",
+    ]
+
+    value = bad_values[
+        (event_number - 1) % len(bad_values)
+    ]
+
+    event["amount"] = value
+
+    return event, f"amount_{repr(value)}"
+
+
+# ============================================================
+# Bad currency scenario
+# ============================================================
+
+def apply_bad_currency(event):
+    event["currency"] = "XYZ"
+
+    return event, "invalid_currency"
+
+
+# ============================================================
+# Bad timestamp scenario
+# ============================================================
+
+def apply_bad_timestamp(event):
+    event["timestamp"] = "not-a-valid-timestamp"
+
+    return event, "invalid_timestamp"
+
+
+# ============================================================
+# Mixed error scenario
+# ============================================================
+
+def apply_mixed_error(event, error_number):
+
+    error_types = [
+        "missing_field",
+        "bad_quantity",
+        "bad_amount",
+        "bad_currency",
+        "bad_timestamp",
+    ]
+
+    error_type = error_types[
+        (error_number - 1) % len(error_types)
+    ]
+
+    if error_type == "missing_field":
+
+        fields = [
+            "event_id",
+            "quantity",
+            "amount",
+            "currency",
+        ]
+
+        field_to_remove = fields[
+            (error_number - 1) % len(fields)
+        ]
+
+        del event[field_to_remove]
+
+        return event, f"missing_{field_to_remove}"
+
+    if error_type == "bad_quantity":
+
+        bad_values = [
+            0,
+            -5,
+            "ten",
+        ]
+
+        value = bad_values[
+            (error_number - 1) % len(bad_values)
+        ]
+
+        event["quantity"] = value
+
+        return event, f"quantity_{repr(value)}"
+
+    if error_type == "bad_amount":
+
+        bad_values = [
+            -10,
+            "abc",
+        ]
+
+        value = bad_values[
+            (error_number - 1) % len(bad_values)
+        ]
+
+        event["amount"] = value
+
+        return event, f"amount_{repr(value)}"
+
+    if error_type == "bad_currency":
+
+        return apply_bad_currency(event)
+
+    if error_type == "bad_timestamp":
+
+        return apply_bad_timestamp(event)
+
+    return event, None
+
+
+# ============================================================
+# Event generation
+# ============================================================
+
+def generate_checkout_event(event_number):
+
+    event = create_base_event(event_number)
+
+    # --------------------------------------------------------
+    # NORMAL
+    # --------------------------------------------------------
+
+    if QUALITY_SCENARIO == "NORMAL":
+
+        if event_number % 50 == 0:
+            event["currency"] = "XYZ"
+            return event, False, "invalid_currency"
+
         return event, True, None
 
-    invalid_type = random.choice([
-        "missing_customer",
-        "zero_quantity",
-        "negative_amount",
-        "invalid_currency"
-    ])
+    # --------------------------------------------------------
+    # MISSING_FIELDS
+    # --------------------------------------------------------
 
-    if invalid_type == "missing_customer":
-        event["customer_id"] = None
+    if QUALITY_SCENARIO == "MISSING_FIELDS":
 
-    elif invalid_type == "zero_quantity":
-        event["quantity"] = 0
+        event, error_type = apply_missing_fields(
+            event,
+            event_number
+        )
 
-    elif invalid_type == "negative_amount":
-        event["amount"] = -abs(event["amount"])
+        return event, False, error_type
 
-    elif invalid_type == "invalid_currency":
-        event["currency"] = "XYZ"
+    # --------------------------------------------------------
+    # BAD_QUANTITY
+    # --------------------------------------------------------
 
-    return event, False, invalid_type
+    if QUALITY_SCENARIO == "BAD_QUANTITY":
+
+        event, error_type = apply_bad_quantity(
+            event,
+            event_number
+        )
+
+        return event, False, error_type
+
+    # --------------------------------------------------------
+    # BAD_AMOUNT
+    # --------------------------------------------------------
+
+    if QUALITY_SCENARIO == "BAD_AMOUNT":
+
+        event, error_type = apply_bad_amount(
+            event,
+            event_number
+        )
+
+        return event, False, error_type
+
+    # --------------------------------------------------------
+    # BAD_CURRENCY
+    # --------------------------------------------------------
+
+    if QUALITY_SCENARIO == "BAD_CURRENCY":
+
+        event, error_type = apply_bad_currency(event)
+
+        return event, False, error_type
+
+    # --------------------------------------------------------
+    # MIXED_ERRORS
+    # --------------------------------------------------------
+
+    if QUALITY_SCENARIO == "MIXED_ERRORS":
+
+        # Every 4th event is invalid.
+        #
+        # 100 total
+        # 75 valid
+        # 25 invalid
+        #
+        # Expected quality = 75%
+        # Expected invalid rate = 25%
+
+        if event_number % 4 != 0:
+            return event, True, None
+
+        error_number = event_number // 4
+
+        event, error_type = apply_mixed_error(
+            event,
+            error_number
+        )
+
+        return event, False, error_type
+
+    raise ValueError(
+        f"Unsupported scenario: {QUALITY_SCENARIO}"
+    )
 
 
 # ============================================================
@@ -201,13 +360,14 @@ def generate_checkout_event(event_number):
 # ============================================================
 
 def send_event_with_retry(event):
-    """
-    Send one event to Kafka with retry handling.
-    """
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    for attempt in range(
+        1,
+        MAX_RETRIES + 1
+    ):
 
         try:
+
             future = producer.send(
                 KAFKA_TOPIC,
                 value=event
@@ -217,7 +377,10 @@ def send_event_with_retry(event):
 
             return True
 
-        except (KafkaTimeoutError, KafkaError) as error:
+        except (
+            KafkaTimeoutError,
+            KafkaError
+        ) as error:
 
             print(
                 f"[WARN] Kafka send failed "
@@ -227,7 +390,8 @@ def send_event_with_retry(event):
             if attempt < MAX_RETRIES:
 
                 print(
-                    f"[INFO] Retrying in {RETRY_DELAY} second(s)..."
+                    f"[INFO] Retrying in "
+                    f"{RETRY_DELAY} second(s)..."
                 )
 
                 time.sleep(RETRY_DELAY)
@@ -248,132 +412,150 @@ def send_event_with_retry(event):
 
 def main():
 
-    # Continue from event 269 because events 001-268
-    # were already generated during the previous run.
-    event_number = 269
+    print(
+        f"[INFO] Kafka broker: "
+        f"{KAFKA_BROKER}"
+    )
 
-    initial_invalid_rate = get_invalid_event_rate(event_number)
+    print(
+        f"[INFO] Kafka topic: "
+        f"{KAFKA_TOPIC}"
+    )
 
-    print(f"[INFO] Kafka broker: {KAFKA_BROKER}")
-    print(f"[INFO] Kafka topic: {KAFKA_TOPIC}")
-    print(f"[INFO] Event interval: {EVENT_INTERVAL} second(s)")
-    print(f"[INFO] Quality scenario: {QUALITY_SCENARIO}")
-    print(f"[INFO] Window size: {WINDOW_SIZE} events")
     print(
-        f"[INFO] Starting event number: {event_number}"
+        f"[INFO] Event interval: "
+        f"{EVENT_INTERVAL} second(s)"
     )
+
     print(
-        f"[INFO] Starting expected quality: "
-        f"{(1 - initial_invalid_rate) * 100:.0f}%"
+        f"[INFO] Quality scenario: "
+        f"{QUALITY_SCENARIO}"
     )
+
     print(
-        f"[INFO] Starting expected invalid rate: "
-        f"{initial_invalid_rate * 100:.0f}%"
+        f"[INFO] Total events: "
+        f"{TOTAL_EVENTS}"
     )
-    print("[INFO] Continuing SUDDEN_DROP anomaly window...")
+
     print("-" * 60)
 
-    current_window = None
+    valid_count = 0
+    invalid_count = 0
+    sent_count = 0
 
     try:
 
-        while True:
+        for event_number in range(
+            1,
+            TOTAL_EVENTS + 1
+        ):
 
-            # Stop after event 300.
-            if event_number > 300:
-
-                print("-" * 60)
-                print(
-                    "[INFO] Completed events 269-300."
-                )
-                print(
-                    "[INFO] SUDDEN_DROP anomaly window 5 "
-                    "is now complete across both runs "
-                    "(events 241-300)."
-                )
-                break
-
-            window_number = get_current_window(event_number)
-
-            if window_number != current_window:
-
-                current_window = window_number
-
-                invalid_rate = get_invalid_event_rate(
-                    event_number
-                )
-
-                expected_quality = get_expected_quality(
-                    event_number
-                )
-
-                window_start = (
-                    (window_number - 1) * WINDOW_SIZE
-                ) + 1
-
-                window_end = (
-                    window_number * WINDOW_SIZE
-                )
-
-                print(
-                    f"[INFO] Window {window_number}: "
-                    f"events {window_start}-{window_end}"
-                )
-
-                print(
-                    f"[INFO] Expected quality: "
-                    f"{expected_quality:.0f}%"
-                )
-
-                print(
-                    f"[INFO] Expected invalid rate: "
-                    f"{invalid_rate * 100:.0f}%"
-                )
-
-            event, is_valid, invalid_type = (
-                generate_checkout_event(event_number)
+            (
+                event,
+                expected_valid,
+                scenario_error
+            ) = generate_checkout_event(
+                event_number
             )
 
-            send_success = send_event_with_retry(event)
+            send_success = send_event_with_retry(
+                event
+            )
 
             if send_success:
 
-                if is_valid:
+                sent_count += 1
+
+                if expected_valid:
+
+                    valid_count += 1
 
                     print(
-                        f"[OK] {event['event_id']} "
+                        f"[OK] "
+                        f"{event.get('event_id', 'NO_EVENT_ID')} "
                         f"valid"
                     )
 
                 else:
 
+                    invalid_count += 1
+
                     print(
-                        f"[INVALID] {event['event_id']} "
-                        f"{invalid_type}"
+                        f"[INVALID] "
+                        f"{event.get('event_id', 'NO_EVENT_ID')} "
+                        f"{scenario_error}"
                     )
 
             else:
 
                 print(
-                    f"[ERROR] Failed to send "
-                    f"{event['event_id']}"
+                    f"[ERROR] Failed to send event "
+                    f"{event_number}"
                 )
-
-            event_number += 1
 
             time.sleep(EVENT_INTERVAL)
 
     except KeyboardInterrupt:
 
         print()
-        print("[INFO] Producer stopped by user.")
+        print(
+            "[INFO] Producer stopped by user."
+        )
 
     finally:
 
         producer.flush()
         producer.close()
 
-        print("[INFO] Kafka producer closed.")
+        print("-" * 60)
+
+        print(
+            "[INFO] Producer finished."
+        )
+
+        print(
+            f"[INFO] Events attempted: "
+            f"{TOTAL_EVENTS}"
+        )
+
+        print(
+            f"[INFO] Events sent: "
+            f"{sent_count}"
+        )
+
+        print(
+            f"[INFO] Expected valid: "
+            f"{valid_count}"
+        )
+
+        print(
+            f"[INFO] Expected invalid: "
+            f"{invalid_count}"
+        )
+
+        if sent_count > 0:
+
+            quality = (
+                valid_count / sent_count
+            ) * 100
+
+            invalid_rate = (
+                invalid_count / sent_count
+            ) * 100
+
+            print(
+                f"[INFO] Expected quality: "
+                f"{quality:.2f}%"
+            )
+
+            print(
+                f"[INFO] Expected invalid rate: "
+                f"{invalid_rate:.2f}%"
+            )
+
+        print(
+            "[INFO] Kafka producer closed."
+        )
 
 
 # ============================================================

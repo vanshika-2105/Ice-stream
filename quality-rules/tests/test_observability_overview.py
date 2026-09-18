@@ -1,5 +1,9 @@
 from fastapi.testclient import TestClient
+import sys
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
 import alert_server.main as main
 
 
@@ -178,3 +182,22 @@ def test_recovering_component_makes_overall_status_degraded():
         )
         == "DEGRADED"
     )
+def test_observability_overview_contains_recovery_metrics():
+    reset_state()
+
+    response = client.get("/observability/overview")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert "recovery" in data
+
+    recovery = data["recovery"]
+
+    assert "recovery_count" in recovery
+    assert "failure_count" in recovery
+    assert "retry_count" in recovery
+    assert "current_circuit_state" in recovery
+    assert "last_failure_time" in recovery
+    assert "last_recovery_time" in recovery

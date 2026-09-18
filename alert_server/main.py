@@ -16,6 +16,8 @@ sys.path.insert(
 
 from alert_server.alert_manager import AlertManager
 from alert_server.system_alerts import SystemAlertEngine
+from alert_server.retry import retry_call
+from alert_server.recovery_metrics import RecoveryMetrics
 from alert_server.circuit_breaker import CircuitBreaker
 
 from alerts import AlertEngine
@@ -113,7 +115,56 @@ profile_currency_counts = {}
 
 system_alert_engine = SystemAlertEngine()
 circuit_breaker = CircuitBreaker()
+recovery_metrics = RecoveryMetrics()
 
+def execute_with_resilience(func):
+    """
+    Execute a backend operation using the existing retry
+    and circuit-breaker mechanisms while recording recovery metrics.
+    """
+
+    if not circuit_breaker.can_execute():
+        recovery_metrics.record_circuit_transition(
+            circuit_breaker.state.value
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail="Dependency temporarily unavailable (circuit open)",
+        )
+
+    try:
+        result = retry_call(func)
+
+        previous_state = circuit_breaker.state
+
+        circuit_breaker.record_success()
+
+        recovery_metrics.current_circuit_state = (
+            circuit_breaker.state.value
+        )
+
+        if previous_state.value == "HALF_OPEN":
+            recovery_metrics.record_recovery("kafka")
+
+            recovery_metrics.record_circuit_transition(
+                circuit_breaker.state.value,
+                "kafka",
+            )
+
+        return result
+
+    except Exception:
+        circuit_breaker.record_failure()
+
+        recovery_metrics.record_failure("kafka")
+
+        recovery_metrics.record_circuit_transition(
+            circuit_breaker.state.value,
+            "kafka",
+        )
+
+        raise
 
 # --------------------------------------------------
 # In-memory alert history
@@ -577,6 +628,7 @@ def get_observability_overview():
             "status": pipeline["status"],
         },
         "system": system,
+        "recovery": recovery_metrics.get_metrics(),
         "overall_status": overall_status,
     }
 

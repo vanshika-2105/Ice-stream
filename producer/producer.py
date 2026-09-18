@@ -8,11 +8,12 @@ from kafka.errors import KafkaError, KafkaTimeoutError
 
 
 # ============================================================
-# Ice-Stream Data Profiling Scenario Producer - Day 14
+# Ice-Stream Pipeline Throughput Instrumentation Producer
+# Day 15
 # ============================================================
 
 print("=" * 60)
-print("Ice-Stream Data Profiling Scenario Producer")
+print("Ice-Stream Pipeline Throughput Instrumentation Producer")
 print("=" * 60)
 
 
@@ -23,14 +24,21 @@ print("=" * 60)
 KAFKA_BROKER = "localhost:9092"
 KAFKA_TOPIC = "checkout-events"
 
-EVENT_INTERVAL = 1.0
+# ------------------------------------------------------------
+# Event rate configuration
+#
+# 1.0  -> approximately 1 event/sec
+# 0.1  -> approximately 10 events/sec
+# 0.02 -> approximately 50 events/sec
+# ------------------------------------------------------------
+EVENT_INTERVAL = 0.02
 
 MAX_RETRIES = 5
 RETRY_DELAY = 3
 
 
 # ============================================================
-# Day 14 scenario configuration
+# Quality scenario configuration
 # ============================================================
 
 # Available scenarios:
@@ -73,7 +81,7 @@ if QUALITY_SCENARIO not in VALID_SCENARIOS:
 producer = KafkaProducer(
     bootstrap_servers=KAFKA_BROKER,
     value_serializer=lambda value: json.dumps(value).encode("utf-8"),
-    retries=0
+    retries=0,
 )
 
 
@@ -82,6 +90,13 @@ producer = KafkaProducer(
 # ============================================================
 
 def create_base_event(event_number):
+    """
+    Create the existing checkout business event.
+
+    The existing schema is preserved.
+    Event timestamp is generated in UTC.
+    """
+
     return {
         "event_id": f"evt_{event_number:03d}",
         "event_type": "checkout",
@@ -102,6 +117,7 @@ def create_base_event(event_number):
 # ============================================================
 
 def apply_missing_fields(event, event_number):
+
     fields = [
         "event_id",
         "quantity",
@@ -123,6 +139,7 @@ def apply_missing_fields(event, event_number):
 # ============================================================
 
 def apply_bad_quantity(event, event_number):
+
     bad_values = [
         0,
         -5,
@@ -143,6 +160,7 @@ def apply_bad_quantity(event, event_number):
 # ============================================================
 
 def apply_bad_amount(event, event_number):
+
     bad_values = [
         -10,
         "abc",
@@ -162,6 +180,7 @@ def apply_bad_amount(event, event_number):
 # ============================================================
 
 def apply_bad_currency(event):
+
     event["currency"] = "XYZ"
 
     return event, "invalid_currency"
@@ -172,6 +191,7 @@ def apply_bad_currency(event):
 # ============================================================
 
 def apply_bad_timestamp(event):
+
     event["timestamp"] = "not-a-valid-timestamp"
 
     return event, "invalid_timestamp"
@@ -269,7 +289,9 @@ def generate_checkout_event(event_number):
     if QUALITY_SCENARIO == "NORMAL":
 
         if event_number % 50 == 0:
+
             event["currency"] = "XYZ"
+
             return event, False, "invalid_currency"
 
         return event, True, None
@@ -282,7 +304,7 @@ def generate_checkout_event(event_number):
 
         event, error_type = apply_missing_fields(
             event,
-            event_number
+            event_number,
         )
 
         return event, False, error_type
@@ -295,7 +317,7 @@ def generate_checkout_event(event_number):
 
         event, error_type = apply_bad_quantity(
             event,
-            event_number
+            event_number,
         )
 
         return event, False, error_type
@@ -308,7 +330,7 @@ def generate_checkout_event(event_number):
 
         event, error_type = apply_bad_amount(
             event,
-            event_number
+            event_number,
         )
 
         return event, False, error_type
@@ -339,13 +361,14 @@ def generate_checkout_event(event_number):
         # Expected invalid rate = 25%
 
         if event_number % 4 != 0:
+
             return event, True, None
 
         error_number = event_number // 4
 
         event, error_type = apply_mixed_error(
             event,
-            error_number
+            error_number,
         )
 
         return event, False, error_type
@@ -363,14 +386,14 @@ def send_event_with_retry(event):
 
     for attempt in range(
         1,
-        MAX_RETRIES + 1
+        MAX_RETRIES + 1,
     ):
 
         try:
 
             future = producer.send(
                 KAFKA_TOPIC,
-                value=event
+                value=event,
             )
 
             future.get(timeout=10)
@@ -379,7 +402,7 @@ def send_event_with_retry(event):
 
         except (
             KafkaTimeoutError,
-            KafkaError
+            KafkaError,
         ) as error:
 
             print(
@@ -427,6 +450,15 @@ def main():
         f"{EVENT_INTERVAL} second(s)"
     )
 
+    if EVENT_INTERVAL > 0:
+
+        target_rate = 1 / EVENT_INTERVAL
+
+        print(
+            f"[INFO] Target event rate: "
+            f"approximately {target_rate:.2f} events/sec"
+        )
+
     print(
         f"[INFO] Quality scenario: "
         f"{QUALITY_SCENARIO}"
@@ -443,17 +475,23 @@ def main():
     invalid_count = 0
     sent_count = 0
 
+    # --------------------------------------------------------
+    # Start throughput measurement
+    # --------------------------------------------------------
+
+    start_time = time.perf_counter()
+
     try:
 
         for event_number in range(
             1,
-            TOTAL_EVENTS + 1
+            TOTAL_EVENTS + 1,
         ):
 
             (
                 event,
                 expected_valid,
-                scenario_error
+                scenario_error,
             ) = generate_checkout_event(
                 event_number
             )
@@ -493,6 +531,10 @@ def main():
                     f"{event_number}"
                 )
 
+            # ------------------------------------------------
+            # Configurable production interval
+            # ------------------------------------------------
+
             time.sleep(EVENT_INTERVAL)
 
     except KeyboardInterrupt:
@@ -504,8 +546,22 @@ def main():
 
     finally:
 
+        # ----------------------------------------------------
+        # Flush remaining Kafka messages before measurement
+        # ----------------------------------------------------
+
         producer.flush()
+
+        # Stop the measurement clock after all sends are flushed.
+        elapsed_seconds = (
+            time.perf_counter() - start_time
+        )
+
         producer.close()
+
+        # ----------------------------------------------------
+        # Final measurements
+        # ----------------------------------------------------
 
         print("-" * 60)
 
@@ -532,6 +588,30 @@ def main():
             f"[INFO] Expected invalid: "
             f"{invalid_count}"
         )
+
+        print(
+            f"[INFO] Elapsed time: "
+            f"{elapsed_seconds:.2f} seconds"
+        )
+
+        # ----------------------------------------------------
+        # Actual producer throughput
+        # ----------------------------------------------------
+
+        if elapsed_seconds > 0:
+
+            throughput = (
+                sent_count / elapsed_seconds
+            )
+
+            print(
+                f"[INFO] Actual throughput: "
+                f"{throughput:.2f} events/sec"
+            )
+
+        # ----------------------------------------------------
+        # Quality measurements
+        # ----------------------------------------------------
 
         if sent_count > 0:
 

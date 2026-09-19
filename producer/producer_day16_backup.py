@@ -8,12 +8,12 @@ from kafka.errors import KafkaError, KafkaTimeoutError
 
 
 # ============================================================
-# Ice-Stream Continuous Streaming Producer
-# Day 16
+# Ice-Stream Pipeline Throughput Instrumentation Producer
+# Day 15
 # ============================================================
 
 print("=" * 60)
-print("Ice-Stream Continuous Streaming Producer")
+print("Ice-Stream Pipeline Throughput Instrumentation Producer")
 print("=" * 60)
 
 
@@ -24,37 +24,14 @@ print("=" * 60)
 KAFKA_BROKER = "localhost:9092"
 KAFKA_TOPIC = "checkout-events"
 
-
-# ============================================================
+# ------------------------------------------------------------
 # Event rate configuration
 #
-# NORMAL  : 0.1  -> approximately 10 events/sec
-# MEDIUM  : 0.05 -> approximately 20 events/sec
-# STRESS  : 0.02 -> approximately 50 events/sec
-#
-# Start with NORMAL. Do not immediately use stress rate.
-# ============================================================
-
-STREAM_RATE = "STRESS"
-
-RATE_INTERVALS = {
-    "NORMAL": 0.1,
-    "MEDIUM": 0.05,
-    "STRESS": 0.02,
-}
-
-if STREAM_RATE not in RATE_INTERVALS:
-    raise ValueError(
-        f"Unknown STREAM_RATE: {STREAM_RATE}. "
-        f"Use NORMAL, MEDIUM, or STRESS."
-    )
-
-EVENT_INTERVAL = RATE_INTERVALS[STREAM_RATE]
-
-
-# ============================================================
-# Kafka retry configuration
-# ============================================================
+# 1.0  -> approximately 1 event/sec
+# 0.1  -> approximately 10 events/sec
+# 0.02 -> approximately 50 events/sec
+# ------------------------------------------------------------
+EVENT_INTERVAL = 0.02
 
 MAX_RETRIES = 5
 RETRY_DELAY = 3
@@ -74,6 +51,8 @@ RETRY_DELAY = 3
 # MIXED_ERRORS
 
 QUALITY_SCENARIO = "MIXED_ERRORS"
+
+TOTAL_EVENTS = 100
 
 
 # ============================================================
@@ -374,9 +353,12 @@ def generate_checkout_event(event_number):
 
         # Every 4th event is invalid.
         #
-        # Expected:
-        # 75% valid
-        # 25% invalid
+        # 100 total
+        # 75 valid
+        # 25 invalid
+        #
+        # Expected quality = 75%
+        # Expected invalid rate = 25%
 
         if event_number % 4 != 0:
 
@@ -448,7 +430,7 @@ def send_event_with_retry(event):
 
 
 # ============================================================
-# Main continuous producer loop
+# Main producer loop
 # ============================================================
 
 def main():
@@ -464,26 +446,18 @@ def main():
     )
 
     print(
-        f"[INFO] Streaming mode: "
-        f"CONTINUOUS"
-    )
-
-    print(
-        f"[INFO] Rate profile: "
-        f"{STREAM_RATE}"
-    )
-
-    print(
         f"[INFO] Event interval: "
         f"{EVENT_INTERVAL} second(s)"
     )
 
-    target_rate = 1 / EVENT_INTERVAL
+    if EVENT_INTERVAL > 0:
 
-    print(
-        f"[INFO] Target event rate: "
-        f"approximately {target_rate:.2f} events/sec"
-    )
+        target_rate = 1 / EVENT_INTERVAL
+
+        print(
+            f"[INFO] Target event rate: "
+            f"approximately {target_rate:.2f} events/sec"
+        )
 
     print(
         f"[INFO] Quality scenario: "
@@ -491,7 +465,8 @@ def main():
     )
 
     print(
-        "[INFO] Press Ctrl+C to stop the producer."
+        f"[INFO] Total events: "
+        f"{TOTAL_EVENTS}"
     )
 
     print("-" * 60)
@@ -499,8 +474,6 @@ def main():
     valid_count = 0
     invalid_count = 0
     sent_count = 0
-    failed_count = 0
-    event_number = 1
 
     # --------------------------------------------------------
     # Start throughput measurement
@@ -510,7 +483,10 @@ def main():
 
     try:
 
-        while True:
+        for event_number in range(
+            1,
+            TOTAL_EVENTS + 1,
+        ):
 
             (
                 event,
@@ -550,17 +526,13 @@ def main():
 
             else:
 
-                failed_count += 1
-
                 print(
                     f"[ERROR] Failed to send event "
                     f"{event_number}"
                 )
 
-            event_number += 1
-
             # ------------------------------------------------
-            # Controlled streaming interval
+            # Configurable production interval
             # ------------------------------------------------
 
             time.sleep(EVENT_INTERVAL)
@@ -575,11 +547,12 @@ def main():
     finally:
 
         # ----------------------------------------------------
-        # Flush remaining Kafka messages
+        # Flush remaining Kafka messages before measurement
         # ----------------------------------------------------
 
         producer.flush()
 
+        # Stop the measurement clock after all sends are flushed.
         elapsed_seconds = (
             time.perf_counter() - start_time
         )
@@ -598,17 +571,12 @@ def main():
 
         print(
             f"[INFO] Events attempted: "
-            f"{event_number - 1}"
+            f"{TOTAL_EVENTS}"
         )
 
         print(
             f"[INFO] Events sent: "
             f"{sent_count}"
-        )
-
-        print(
-            f"[INFO] Events failed: "
-            f"{failed_count}"
         )
 
         print(

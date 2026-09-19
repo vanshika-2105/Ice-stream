@@ -77,7 +77,7 @@ services:
 
       # Day 14: explicit JDBC catalog configuration
       CATALOG_CATALOG__IMPL: org.apache.iceberg.jdbc.JdbcCatalog
-      CATALOG_URI: jdbc:sqlite:/tmp/iceberg_rest.db
+      CATALOG_URI: jdbc:sqlite:/tmp/iceberg_rest.db?busy_timeout=30000
       CATALOG_JDBC_USER: user
       CATALOG_JDBC_PASSWORD: password
 

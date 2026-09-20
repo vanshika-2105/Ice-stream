@@ -1,33 +1,49 @@
 from pyflink.table import EnvironmentSettings, TableEnvironment
 
 
+# ============================================================
+# Kafka Configuration
+# ============================================================
+
 KAFKA_BOOTSTRAP_SERVERS = "kafka:29092"
 KAFKA_SOURCE_TOPIC = "checkout-events"
 KAFKA_GROUP_ID = "ice-stream-validation"
 KAFKA_DLQ_TOPIC = "checkout-events-dlq"
 
+
+# ============================================================
+# Iceberg Configuration
+# ============================================================
+
 ICEBERG_CATALOG = "iceberg_catalog"
 ICEBERG_DATABASE = "checkout"
 ICEBERG_TABLE = "checkout_events"
 ICEBERG_METRICS_TABLE = "quality_metrics"
+ICEBERG_STATUS_TABLE = "stream_status"
 
+
+# ============================================================
+# Main
+# ============================================================
 
 def main():
+
     settings = EnvironmentSettings.in_streaming_mode()
+
     table_env = TableEnvironment.create(settings)
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # Checkpointing
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     table_env.get_config().get_configuration().set_string(
         "execution.checkpointing.interval",
         "60s"
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # Iceberg REST Catalog
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     table_env.execute_sql(
         f"""
@@ -46,9 +62,9 @@ def main():
         """
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # Iceberg Database
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     table_env.execute_sql(
         f"""
@@ -57,9 +73,9 @@ def main():
         """
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # Kafka Source
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     table_env.execute_sql(
         f"""
@@ -73,6 +89,7 @@ def main():
             quantity INT,
             amount DOUBLE,
             currency STRING,
+
             proc_time AS PROCTIME()
         ) WITH (
             'connector' = 'kafka',
@@ -87,9 +104,9 @@ def main():
         """
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # Valid Events -> Iceberg
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     table_env.execute_sql(
         f"""
@@ -110,9 +127,9 @@ def main():
         """
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # Quality Metrics -> Iceberg
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     table_env.execute_sql(
         f"""
@@ -129,9 +146,28 @@ def main():
         """
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
+    # Stream Status -> Iceberg
+    #
+    # Used by the backend/dashboard to determine whether
+    # events are currently being processed.
+    # --------------------------------------------------------
+
+    table_env.execute_sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS
+        {ICEBERG_CATALOG}.{ICEBERG_DATABASE}.{ICEBERG_STATUS_TABLE} (
+            window_start TIMESTAMP_LTZ(3),
+            window_end TIMESTAMP_LTZ(3),
+            events_processed BIGINT,
+            last_event_time TIMESTAMP_LTZ(3)
+        )
+        """
+    )
+
+    # --------------------------------------------------------
     # Invalid Events -> Kafka DLQ
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     table_env.execute_sql(
         f"""
@@ -155,15 +191,15 @@ def main():
         """
     )
 
-    # ------------------------------------------------------------
+    # ========================================================
     # Statement Set
-    # ------------------------------------------------------------
+    # ========================================================
 
     statement_set = table_env.create_statement_set()
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # VALID EVENTS -> ICEBERG
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     statement_set.add_insert_sql(
         f"""
@@ -196,12 +232,12 @@ def main():
         """
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # INVALID EVENTS -> DLQ
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     statement_set.add_insert_sql(
-        """
+        f"""
         INSERT INTO checkout_events_dlq
         SELECT
             event_id,
@@ -213,34 +249,49 @@ def main():
             quantity,
             amount,
             currency,
+
             CASE
                 WHEN event_id IS NULL
                     THEN 'Missing event_id'
+
                 WHEN event_type IS NULL
                     THEN 'Missing event_type'
+
                 WHEN event_type <> 'checkout'
                     THEN 'Invalid event_type'
+
                 WHEN order_id IS NULL
                     THEN 'Missing order_id'
+
                 WHEN customer_id IS NULL
                     THEN 'Missing customer_id'
+
                 WHEN product_id IS NULL
                     THEN 'Missing product_id'
+
                 WHEN quantity IS NULL
                     THEN 'Missing quantity'
+
                 WHEN quantity <= 0
                     THEN 'Invalid quantity'
+
                 WHEN amount IS NULL
                     THEN 'Missing amount'
+
                 WHEN amount < 0
                     THEN 'Invalid amount'
+
                 WHEN currency IS NULL
                     THEN 'Missing currency'
+
                 WHEN currency NOT IN ('INR', 'USD', 'EUR', 'GBP')
                     THEN 'Invalid currency'
+
                 ELSE 'Unknown validation error'
             END
+
         FROM kafka_checkout_events
+
         WHERE
             event_id IS NULL
             OR event_type IS NULL
@@ -257,17 +308,19 @@ def main():
         """
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # 1-MINUTE WINDOWED QUALITY METRICS -> ICEBERG
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
 
     statement_set.add_insert_sql(
         f"""
         INSERT INTO
         {ICEBERG_CATALOG}.{ICEBERG_DATABASE}.{ICEBERG_METRICS_TABLE}
+
         SELECT
             window_start,
             window_end,
+
             COUNT(*) AS total_events,
 
             SUM(
@@ -310,6 +363,7 @@ def main():
 
             CASE
                 WHEN COUNT(*) = 0 THEN 0.0
+
                 ELSE
                     CAST(
                         SUM(
@@ -324,7 +378,12 @@ def main():
                                     AND quantity > 0
                                     AND amount IS NOT NULL
                                     AND amount >= 0
-                                    AND currency IN ('INR', 'USD', 'EUR', 'GBP')
+                                    AND currency IN (
+                                        'INR',
+                                        'USD',
+                                        'EUR',
+                                        'GBP'
+                                    )
                                 THEN 1
                                 ELSE 0
                             END
@@ -334,6 +393,7 @@ def main():
 
             CASE
                 WHEN COUNT(*) = 0 THEN 0.0
+
                 ELSE
                     CAST(
                         SUM(
@@ -350,7 +410,12 @@ def main():
                                     OR amount IS NULL
                                     OR amount < 0
                                     OR currency IS NULL
-                                    OR currency NOT IN ('INR', 'USD', 'EUR', 'GBP')
+                                    OR currency NOT IN (
+                                        'INR',
+                                        'USD',
+                                        'EUR',
+                                        'GBP'
+                                    )
                                 THEN 1
                                 ELSE 0
                             END
@@ -365,17 +430,68 @@ def main():
                 INTERVAL '1' MINUTE
             )
         )
-        GROUP BY window_start, window_end
+
+        GROUP BY
+            window_start,
+            window_end
         """
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
+    # STREAM STATUS -> ICEBERG
+    #
+    # One row is produced for each one-minute processing window.
+    #
+    # events_processed:
+    #     Number of Kafka events processed during the window.
+    #
+    # last_event_time:
+    #     Latest Flink processing time observed in the window.
+    #
+    # If the producer stops, no new windows containing events
+    # will be produced and the latest last_event_time will remain
+    # old. This allows the backend to detect a stale stream.
+    # --------------------------------------------------------
+
+    statement_set.add_insert_sql(
+        f"""
+        INSERT INTO
+        {ICEBERG_CATALOG}.{ICEBERG_DATABASE}.{ICEBERG_STATUS_TABLE}
+
+        SELECT
+            window_start,
+            window_end,
+
+            COUNT(*) AS events_processed,
+
+            MAX(proc_time) AS last_event_time
+
+        FROM TABLE(
+            TUMBLE(
+                TABLE kafka_checkout_events,
+                DESCRIPTOR(proc_time),
+                INTERVAL '1' MINUTE
+            )
+        )
+
+        GROUP BY
+            window_start,
+            window_end
+        """
+    )
+
+    # ========================================================
     # Start Streaming Job
-    # ------------------------------------------------------------
+    # ========================================================
 
     result = statement_set.execute()
+
     result.wait()
 
+
+# ============================================================
+# Entry Point
+# ============================================================
 
 if __name__ == "__main__":
     main()

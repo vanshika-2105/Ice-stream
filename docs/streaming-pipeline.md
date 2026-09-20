@@ -1806,3 +1806,104 @@ Verified Flink job is running and consuming Kafka events.
 ## Result
 
 Unified pipeline health verification completed successfully.
+# Day 17 — Streaming Pipeline Verification
+
+## Objective
+
+Verify that the Ice-Stream pipeline continuously produces and processes events so that downstream components can receive real-time data.
+
+## Tasks Completed
+
+### 1. Kafka Infrastructure Verification
+
+Verified that the Ice-Stream infrastructure was running successfully.
+
+Services verified:
+
+* Kafka
+* Flink JobManager
+* Flink TaskManager
+* MinIO
+* Iceberg REST
+
+Kafka was available on:
+
+```text
+localhost:9092
+```
+
+---
+
+### 2. Kafka Topic Verification
+
+The main streaming topic was verified:
+
+```text
+checkout-events
+```
+
+The pipeline also uses:
+
+```text
+checkout-events-dlq
+checkout-events-invalid
+checkout-events-valid
+```
+
+---
+
+### 3. Continuous Producer Verification
+
+The existing producer was used without creating a new producer.
+
+Producer configuration:
+
+```text
+Streaming mode: CONTINUOUS
+Rate profile: STRESS
+Event interval: 0.02 seconds
+Target rate: approximately 50 events/sec
+Quality scenario: MIXED_ERRORS
+```
+
+A streaming test successfully produced:
+
+```text
+Events attempted: 81
+Events sent: 81
+Events failed: 0
+Actual throughput: 35.95 events/sec
+Expected valid: 61
+Expected invalid: 20
+Expected quality: 75.31%
+Expected invalid rate: 24.69%
+```
+
+This confirmed that events could continuously enter Kafka successfully.
+
+---
+
+### 4. Flink Processing Verification
+
+The updated Flink job was successfully submitted.
+
+Job ID:
+
+```text
+f167b6350b4e7148b72b34cd7d710bb8
+```
+
+The job was verified as:
+
+```text
+RUNNING
+```
+
+The Flink job contains the following outputs:
+
+```text
+iceberg_catalog.checkout.checkout_events
+default_catalog.default_database.checkout_events_dlq
+iceberg_catalog.checkout.quality_metrics
+iceberg_catalog_
+```

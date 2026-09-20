@@ -33,8 +33,13 @@ from profiler import (
 
 from pipeline_metrics import (
     build_pipeline_metrics,
+    build_performance_snapshot,
+    calculate_latency_percentiles,
+    performance_snapshot_to_dict,
     pipeline_metrics_to_dict,
 )
+
+from performance_history import PerformanceHistory
 from health_checks import (
     check_kafka,
     check_producer,
@@ -106,6 +111,9 @@ pipeline_start_time = None
 pipeline_elapsed_seconds = 0.0
 pipeline_latencies_ms = []
 pipeline_status = "HEALTHY"
+
+# Historical pipeline performance snapshots
+performance_history = PerformanceHistory(max_size=100)
 
 # Data profiling state
 profile_event_type_counts = {}
@@ -344,7 +352,30 @@ def get_pipeline_metrics():
         latencies_ms=pipeline_latencies_ms,
     )
 
-    return pipeline_metrics_to_dict(pipeline_metrics)
+    response = pipeline_metrics_to_dict(
+        pipeline_metrics
+    )
+
+    percentiles = calculate_latency_percentiles(
+        pipeline_latencies_ms
+    )
+
+    response.update(percentiles)
+
+    latest_snapshot = performance_history.get_latest()
+
+    response["performance_history"] = [
+        performance_snapshot_to_dict(snapshot)
+        for snapshot in performance_history.get_history()
+    ]
+
+    response["latest_snapshot"] = (
+        performance_snapshot_to_dict(latest_snapshot)
+        if latest_snapshot
+        else None
+    )
+
+    return response
 # --------------------------------------------------
 # Pipeline performance status
 # --------------------------------------------------
@@ -866,6 +897,22 @@ async def process_event(event: dict):
     pipeline_data = pipeline_metrics_to_dict(
         pipeline_metrics
     )
+        # --------------------------------------------------
+    # Store performance snapshot
+    # --------------------------------------------------
+
+    performance_snapshot = build_performance_snapshot(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        events_received=metrics["total_events"],
+        events_processed=metrics["total_events"],
+        latencies_ms=pipeline_latencies_ms,
+        elapsed_seconds=pipeline_elapsed_seconds,
+        dlq_events=metrics["invalid_events"],
+    )
+
+    performance_history.add_snapshot(
+        performance_snapshot
+    )
 
     current_pipeline_status = pipeline_data["status"]
 
@@ -930,7 +977,8 @@ async def process_event(event: dict):
     # --------------------------------------------------
 
     overview = get_observability_overview()
-        # --------------------------------------------------
+
+    # --------------------------------------------------
     # Broadcast throttled live metrics
     # --------------------------------------------------
 
@@ -954,9 +1002,13 @@ async def process_event(event: dict):
                 "valid_events": live_metrics.valid_events,
                 "invalid_events": live_metrics.invalid_events,
                 "throughput_eps": live_metrics.throughput_eps,
-                "average_latency_ms": live_metrics.average_latency_ms,
+                "average_latency_ms": (
+                    live_metrics.average_latency_ms
+                ),
                 "dlq_rate": live_metrics.dlq_rate,
-                "quality_percentage": live_metrics.quality_percentage,
+                "quality_percentage": (
+                    live_metrics.quality_percentage
+                ),
                 "stream_status": live_metrics.status,
             },
         }
@@ -965,44 +1017,57 @@ async def process_event(event: dict):
             live_metrics_message
         )
 
+        # Record the actual aggregated WebSocket update.
+        live_aggregator.record_websocket_update(
+            update_time=current_time
+        )
+
         last_live_metrics_broadcast = current_time
+
+    # --------------------------------------------------
+    # Broadcast observability overview
+    # --------------------------------------------------
+
     overview_message = {
         "type": "OBSERVABILITY_OVERVIEW",
         "overall_status": overview["overall_status"],
         "quality_score": overview["quality"]["quality_score"],
         "throughput_eps": overview["pipeline"]["throughput_eps"],
-        "average_latency_ms": overview["pipeline"]["average_latency_ms"],
+        "average_latency_ms": (
+            overview["pipeline"]["average_latency_ms"]
+        ),
         "dlq_rate": overview["pipeline"]["dlq_rate"],
         "is_anomaly": overview["anomaly"]["is_anomaly"],
     }
 
     await alert_manager.broadcast(
         overview_message
-    )
-    # --------------------------------------------------
-    # Return event result
+    )    
+        # --------------------------------------------------
+    # Return event validation result
     # --------------------------------------------------
 
     return {
-        **result,
+        "valid": result["valid"],
+        "errors": result["errors"],
         "status": status,
     }
 # --------------------------------------------------
-# WebSocket alerts
+# WebSocket endpoint
 # --------------------------------------------------
 
 @app.websocket("/ws/alerts")
-async def websocket_alerts(websocket: WebSocket):
-    """Maintain a WebSocket connection for real-time alerts."""
+async def websocket_endpoint(websocket: WebSocket):
+    """Maintain a live WebSocket connection for alerts."""
 
     await alert_manager.connect(websocket)
 
     try:
         while True:
             await websocket.receive_text()
+
     except WebSocketDisconnect:
         alert_manager.disconnect(websocket)
-# --------------------------------------------------
-# WebSocket alerts
-# --------------------------------------------------
 
+    except Exception:
+        alert_manager.disconnect(websocket)

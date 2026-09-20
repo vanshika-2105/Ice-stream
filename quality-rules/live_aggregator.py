@@ -21,6 +21,10 @@ class LiveAggregator:
 
         self.last_event_time = None
 
+        # WebSocket performance tracking
+        self.websocket_updates = 0
+        self.last_websocket_update_time = None
+
     def record_event(
         self,
         valid: bool,
@@ -52,14 +56,19 @@ class LiveAggregator:
 
         cutoff = now - LIVE_WINDOW_SECONDS
 
-        while self.events and self.events[0]["monotonic_time"] < cutoff:
+        while (
+            self.events
+            and self.events[0]["monotonic_time"] < cutoff
+        ):
             self.events.popleft()
 
     def _get_current_events(self):
         """Return events currently inside the live window."""
 
         now = time.monotonic()
+
         self._remove_old_events(now)
+
         return list(self.events)
 
     def get_metrics(self) -> LiveMetrics:
@@ -68,13 +77,18 @@ class LiveAggregator:
         current_events = self._get_current_events()
 
         total_events = len(current_events)
+
         valid_events = sum(
-            1 for event in current_events if event["valid"]
+            1
+            for event in current_events
+            if event["valid"]
         )
+
         invalid_events = total_events - valid_events
 
         if total_events > 0:
             elapsed_seconds = LIVE_WINDOW_SECONDS
+
             throughput_eps = round(
                 total_events / elapsed_seconds,
                 2,
@@ -97,6 +111,7 @@ class LiveAggregator:
                 (valid_events / total_events) * 100,
                 2,
             )
+
         else:
             throughput_eps = 0.0
             average_latency_ms = 0.0
@@ -128,7 +143,9 @@ class LiveAggregator:
         last_event = self.last_event_time
 
         if last_event.tzinfo is None:
-            last_event = last_event.replace(tzinfo=timezone.utc)
+            last_event = last_event.replace(
+                tzinfo=timezone.utc
+            )
 
         age_seconds = (
             now - last_event
@@ -141,7 +158,9 @@ class LiveAggregator:
 
         if metrics_events:
             valid_events = sum(
-                1 for event in metrics_events if event["valid"]
+                1
+                for event in metrics_events
+                if event["valid"]
             )
 
             quality_percentage = (
@@ -156,11 +175,42 @@ class LiveAggregator:
 
         return "ACTIVE"
 
+    def record_websocket_update(
+        self,
+        update_time: float | None = None,
+    ):
+        """Record one aggregated WebSocket metrics update."""
+
+        if update_time is None:
+            update_time = time.monotonic()
+
+        self.websocket_updates += 1
+        self.last_websocket_update_time = update_time
+
+    def get_websocket_update_rate(
+        self,
+        elapsed_seconds: float,
+    ) -> float:
+        """Calculate WebSocket metrics updates per second."""
+
+        if elapsed_seconds <= 0:
+            return 0.0
+
+        return round(
+            self.websocket_updates / elapsed_seconds,
+            2,
+        )
+
     def reset(self):
         """Clear all live aggregation state."""
 
         self.events.clear()
+
         self.total_events = 0
         self.valid_events = 0
         self.invalid_events = 0
+
         self.last_event_time = None
+
+        self.websocket_updates = 0
+        self.last_websocket_update_time = None

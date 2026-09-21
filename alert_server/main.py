@@ -1,12 +1,29 @@
 from datetime import datetime, timezone
 import time
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import (
+    FastAPI,
+    WebSocket,
+    WebSocketDisconnect,
+    HTTPException,
+    Request,
+)
 from fastapi.middleware.cors import CORSMiddleware
 
 import sys
 from pathlib import Path
-
-
+from alert_server.config import (
+    ALLOWED_ORIGINS,
+    WEBSOCKET_UPDATE_INTERVAL_SECONDS,
+    PERFORMANCE_HISTORY_SIZE,
+)
+ALLOWED_COMPONENTS = {
+    "kafka",
+    "producer",
+    "flink",
+    "backend",
+    "websocket",
+    "iceberg",
+}
 # Add quality-rules to Python path
 sys.path.insert(
     0,
@@ -51,12 +68,39 @@ from health_checks import (
 from live_aggregator import LiveAggregator
 # Live metrics broadcast state
 last_live_metrics_broadcast = 0.0
-LIVE_METRICS_INTERVAL_SECONDS = 1.0
+LIVE_METRICS_INTERVAL_SECONDS = (
+    WEBSOCKET_UPDATE_INTERVAL_SECONDS
+)
 app = FastAPI(
     title="Ice-Stream Alert Server",
     description="Backend service for streaming data quality alerts",
     version="0.3.0",
 )
+@app.exception_handler(Exception)
+async def handle_unexpected_error(
+    request: Request,
+    exc: Exception,
+):
+    """Return a safe response for unexpected server errors."""
+
+    return {
+        "error": "Internal server error",
+        "detail": "Service temporarily unavailable",
+    }
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add basic security headers to HTTP responses."""
+
+    response = await call_next(request)
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=()"
+    )
+
+    return response
 
 def calculate_overall_status(statuses: list[str]) -> str:
     """Calculate the overall observability status."""
@@ -90,7 +134,7 @@ def calculate_overall_status(statuses: list[str]) -> str:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -113,7 +157,9 @@ pipeline_latencies_ms = []
 pipeline_status = "HEALTHY"
 
 # Historical pipeline performance snapshots
-performance_history = PerformanceHistory(max_size=100)
+performance_history = PerformanceHistory(
+    max_size=PERFORMANCE_HISTORY_SIZE
+)
 
 # Data profiling state
 profile_event_type_counts = {}
@@ -540,6 +586,14 @@ async def update_system_component(
 ):
     """Update the status of an infrastructure component."""
 
+    component = component.strip().lower()
+
+    if component not in ALLOWED_COMPONENTS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unknown system component",
+        )
+
     status = payload.get("status")
 
     if status not in {"UP", "DOWN"}:
@@ -548,10 +602,27 @@ async def update_system_component(
             detail="status must be UP or DOWN",
         )
 
+    message = payload.get("message")
+
+    if message is not None:
+        if not isinstance(message, str):
+            raise HTTPException(
+                status_code=400,
+                detail="message must be a string",
+            )
+
+        message = message.strip()
+
+        if len(message) > 500:
+            raise HTTPException(
+                status_code=400,
+                detail="message must not exceed 500 characters",
+            )
+
     alert = system_alert_engine.update_component(
         component=component,
         status=status,
-        message=payload.get("message"),
+        message=message,
     )
 
     if alert is not None:
@@ -574,6 +645,8 @@ async def update_system_component(
         "component": component,
         "alert": alert.to_dict() if alert else None,
     }
+
+
 @app.get("/observability/live")
 def get_live_observability():
     """Return the latest rolling live streaming metrics."""
@@ -1060,7 +1133,23 @@ async def process_event(event: dict):
 async def websocket_endpoint(websocket: WebSocket):
     """Maintain a live WebSocket connection for alerts."""
 
+    origin = websocket.headers.get("origin")
+
+    if origin and origin not in ALLOWED_ORIGINS:
+        await websocket.close(code=1008)
+        return
+
     await alert_manager.connect(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+
+    except WebSocketDisconnect:
+        alert_manager.disconnect(websocket)
+
+    except Exception:
+        alert_manager.disconnect(websocket)
 
     try:
         while True:

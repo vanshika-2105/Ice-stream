@@ -690,14 +690,14 @@ def get_observability_overview():
     components = system.get("components", {})
 
     component_statuses = [
-        component.get("status")
-        for component in components.values()
-        if isinstance(component, dict)
+        status
+        for status in components.values()
+        if isinstance(status, str)
     ]
 
     # Kafka DOWN is considered CRITICAL because Kafka is
     # the primary event-ingestion dependency.
-    if components.get("kafka", {}).get("status") == "DOWN":
+    if components.get("kafka") == "DOWN":
         statuses.append("CRITICAL")
     else:
         statuses.extend(

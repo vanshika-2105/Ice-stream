@@ -7,6 +7,7 @@ class SystemAlert:
     type: str
     severity: str
     component: str
+    status: str
     message: str
     timestamp: str
 
@@ -15,6 +16,7 @@ class SystemAlert:
             "type": self.type,
             "severity": self.severity,
             "component": self.component,
+            "status": self.status,
             "message": self.message,
             "timestamp": self.timestamp,
         }
@@ -47,6 +49,7 @@ class SystemAlertEngine:
                 type="SYSTEM_ALERT",
                 severity="CRITICAL",
                 component=component,
+                status="FAILED",
                 message=message or f"{component} connection unavailable",
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
@@ -62,6 +65,7 @@ class SystemAlertEngine:
                 type="SYSTEM_RECOVERY",
                 severity="INFO",
                 component=component,
+                status="RECOVERED",
                 message=message or f"{component} connection restored",
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )

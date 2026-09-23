@@ -225,3 +225,80 @@ The Ice-Stream controlled failure scenarios were tested using repeatable manual 
 The producer was intentionally stopped, Kafka was intentionally stopped and restarted, and the Flink TaskManager was intentionally stopped and restarted.
 
 After infrastructure recovery, the existing producer successfully sent events again, confirming that the streaming pipeline could continue accepting events after component recovery.
+# Day-19 — Failure & Recovery Testing
+
+## Recovery Testing
+
+### 1. Producer Recovery
+
+**Scenario:** `PRODUCER_STOP`
+
+**Test:**
+
+* Started the producer and confirmed events were being generated.
+* Stopped the producer using `Ctrl+C`.
+* Confirmed that event generation stopped.
+* Restarted the existing producer.
+* Confirmed that new events were generated again.
+
+**Result:** PASS
+
+**Observed behavior:** The producer resumed event generation after restart. Events and throughput resumed.
+
+---
+
+### 2. Kafka Recovery
+
+**Scenario:** `KAFKA_FAILURE`
+
+**Test:**
+
+* Started Kafka, Flink, backend, and producer.
+* Stopped the Kafka container using `docker stop ice-stream-kafka`.
+* Observed the streaming pipeline during the Kafka failure.
+* Restarted Kafka using `docker start ice-stream-kafka`.
+* Checked the Kafka container and logs.
+* Verified that event processing resumed after Kafka recovery.
+
+**Result:** PASS
+
+**Observed behavior:** Kafka became available again after restart and the streaming pipeline resumed processing.
+
+---
+
+### 3. Flink Recovery
+
+**Scenario:** `FLINK_FAILURE`
+
+**Test:**
+
+* Started Kafka, Flink, backend, and producer.
+* Stopped the Flink TaskManager using `docker stop ice-stream-flink-taskmanager`.
+* Observed the processing interruption.
+* Restarted the Flink TaskManager.
+* Verified that Flink returned to the running state.
+* Confirmed that event processing and metrics resumed.
+
+**Result:** PASS
+
+**Observed behavior:** Flink processing resumed after the TaskManager was restarted.
+
+---
+
+## Final Recovery Verification
+
+The following recovery checks were completed:
+
+| Component        | Recovery Tested              | Result |
+| ---------------- | ---------------------------- | ------ |
+| Producer         | Stop and restart             | PASS   |
+| Kafka            | Container stop and restart   | PASS   |
+| Flink            | TaskManager stop and restart | PASS   |
+| Event flow       | Resumed after recovery       | PASS   |
+| Throughput       | Resumed after recovery       | PASS   |
+| Event timestamps | Updated after recovery       | PASS   |
+| Backend          | Healthy                      | PASS   |
+
+## Conclusion
+
+Day-19 failure and recovery testing was completed for the producer, Kafka, and Flink components. The tests demonstrated that the streaming pipeline could resume operation after the tested component was restarted.

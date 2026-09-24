@@ -490,6 +490,8 @@ def test_security_headers():
         response.headers["Permissions-Policy"]
         == "camera=(), microphone=(), geolocation=()"
     )
+
+
 def test_websocket_allows_configured_origin():
     with client.websocket_connect(
         "/ws/alerts",
@@ -505,3 +507,16 @@ def test_websocket_rejects_unconfigured_origin():
             headers={"origin": "http://malicious.example"},
         ):
             pass
+
+
+def test_observability_insights_endpoint():
+    response = client.get("/observability/insights")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert "insights" in data
+    assert "count" in data
+    assert isinstance(data["insights"], list)
+    assert isinstance(data["count"], int)

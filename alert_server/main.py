@@ -66,6 +66,8 @@ from health_checks import (
     check_iceberg,
 )
 from live_aggregator import LiveAggregator
+from insights import generate_insights
+
 # Live metrics broadcast state
 last_live_metrics_broadcast = 0.0
 LIVE_METRICS_INTERVAL_SECONDS = (
@@ -735,6 +737,60 @@ def get_observability_overview():
         "recovery": recovery_metrics.get_metrics(),
         "overall_status": overall_status,
     }
+# --------------------------------------------------
+# Observability insights
+# --------------------------------------------------
+
+@app.get("/observability/insights")
+def get_observability_insights():
+    """Return human-readable insights from current observability metrics."""
+
+    metrics = quality_metrics.get_metrics()
+
+    # Current quality metrics
+    current_quality = metrics["quality_score"]
+
+    # Previous quality snapshot, when available
+    previous_quality = None
+    if len(quality_history) >= 2:
+        previous_quality = quality_history[-2].quality_score
+
+    # Current pipeline metrics
+    pipeline = get_pipeline_metrics()
+
+    # Current error profile
+    profile = get_quality_profile()
+
+    # Current anomaly state
+    anomaly = get_quality_anomaly()
+
+    insights = generate_insights(
+        previous_quality=previous_quality,
+        current_quality=current_quality,
+        previous_latency=None,
+        current_latency=pipeline["average_latency_ms"],
+        previous_throughput=None,
+        current_throughput=pipeline["throughput_eps"],
+        previous_dlq_rate=None,
+        current_dlq_rate=pipeline["dlq_rate"],
+        previous_errors=None,
+        current_errors=profile["error_counts"],
+        is_anomaly=anomaly["is_anomaly"],
+        anomaly_severity=anomaly["severity"],
+        anomaly_reason=(
+            f"Quality deviation: {anomaly['deviation']}"
+            if anomaly["is_anomaly"]
+            else ""
+        ),
+    )
+
+    return {
+        "insights": [
+            insight.to_dict()
+            for insight in insights
+        ],
+        "count": len(insights),
+    }
 
 # --------------------------------------------------
 # Event processing
@@ -1115,9 +1171,25 @@ async def process_event(event: dict):
 
     await alert_manager.broadcast(
         overview_message
-    )    
-        # --------------------------------------------------
+    )
+    
+    # --------------------------------------------------
+    # Broadcast observability insights
+    # --------------------------------------------------
+
+    insight_response = get_observability_insights()
+
+    for insight in insight_response["insights"]:
+        await alert_manager.broadcast(
+            {
+                "type": "OBSERVABILITY_INSIGHT",
+                "insight": insight,
+            }
+        )
+
+    # --------------------------------------------------
     # Return event validation result
+    # --------------------------------------------------
     # --------------------------------------------------
 
     return {

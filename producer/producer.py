@@ -35,12 +35,15 @@ KAFKA_TOPIC = "checkout-events"
 # Start with NORMAL. Do not immediately use stress rate.
 # ============================================================
 
-STREAM_RATE = "STRESS"
+STREAM_RATE = "HUNDRED"
 
 RATE_INTERVALS = {
+    "FIVE": 0.2,
     "NORMAL": 0.1,
     "MEDIUM": 0.05,
+    "TWENTY_FIVE": 0.04,
     "STRESS": 0.02,
+    "HUNDRED": 0.01,
 }
 
 if STREAM_RATE not in RATE_INTERVALS:
@@ -73,7 +76,7 @@ RETRY_DELAY = 3
 # BAD_CURRENCY
 # MIXED_ERRORS
 
-QUALITY_SCENARIO = "MIXED_ERRORS"
+QUALITY_SCENARIO = "NORMAL"
 
 
 # ============================================================

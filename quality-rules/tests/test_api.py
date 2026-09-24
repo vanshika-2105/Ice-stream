@@ -476,3 +476,14 @@ def test_websocket_receives_observability_overview():
         assert "average_latency_ms" in overview
         assert "dlq_rate" in overview
         assert "is_anomaly" in overview
+def test_observability_insights_endpoint():
+    response = client.get("/observability/insights")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert "insights" in data
+    assert "count" in data
+    assert isinstance(data["insights"], list)
+    assert isinstance(data["count"], int)

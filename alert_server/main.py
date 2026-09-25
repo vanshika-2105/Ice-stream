@@ -17,8 +17,9 @@ sys.path.insert(
 from alert_server.alert_manager import AlertManager
 from alert_server.system_alerts import SystemAlertEngine
 from alert_server.circuit_breaker import CircuitBreaker
-
+from alert_server.alert_lifecycle import AlertLifecycleManager
 from alerts import AlertEngine
+
 from metrics import QualityMetrics
 from models import QualityMetricSnapshot
 from validator import validate_checkout_event
@@ -79,6 +80,7 @@ app.add_middleware(
 # --------------------------------------------------
 
 alert_manager = AlertManager()
+alert_lifecycle = AlertLifecycleManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
 
@@ -195,10 +197,52 @@ def get_metrics():
 
 @app.get("/alerts")
 def get_alerts():
-    """Return recent quality and system alert history."""
+    """Return an alert lifecycle summary."""
+
+    return alert_lifecycle.summary()
+
+
+@app.get("/alerts/active")
+def get_active_alerts():
+    """Return currently active and acknowledged alerts."""
 
     return {
-        "alerts": alert_history
+        "alerts": alert_lifecycle.get_active()
+    }
+
+
+@app.get("/alerts/history")
+def get_alert_history():
+    """Return resolved alert history."""
+
+    return {
+        "alerts": alert_lifecycle.get_history()
+    }
+
+
+@app.post("/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: str):
+    """Acknowledge an active alert."""
+
+    alert = alert_lifecycle.acknowledge(alert_id)
+
+    if alert is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Alert {alert_id} not found",
+        )
+
+    alert_data = alert.to_dict()
+
+    await alert_manager.broadcast(
+        {
+            "type": "ALERT_ACKNOWLEDGED",
+            "alert": alert_data,
+        }
+    )
+
+    return {
+        "alert": alert_data
     }
 
 
@@ -406,9 +450,41 @@ async def update_system_component(
     )
 
     if alert is not None:
-
         alert_data = alert.to_dict()
 
+        if alert.type == "SYSTEM_ALERT":
+            lifecycle_alert, lifecycle_created = (
+                alert_lifecycle.create_alert(
+                    alert_type="SYSTEM_ALERT",
+                    severity=alert.severity,
+                    component=alert.component,
+                    message=alert.message,
+                )
+            )
+
+            if lifecycle_created:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_CREATED",
+                        "alert": lifecycle_alert.to_dict(),
+                    }
+                )
+
+        elif alert.type == "SYSTEM_RECOVERY":
+            resolved_alert = alert_lifecycle.resolve_condition(
+                alert_type="SYSTEM_ALERT",
+                component=alert.component,
+            )
+
+            if resolved_alert is not None:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_RESOLVED",
+                        "alert": resolved_alert.to_dict(),
+                    }
+                )
+
+        # Preserve the existing system alert history.
         alert_data["id"] = (
             f"system-alert-{len(alert_history) + 1:03d}"
         )
@@ -418,14 +494,14 @@ async def update_system_component(
         if len(alert_history) > MAX_ALERT_HISTORY:
             alert_history.pop(0)
 
+        # Preserve the existing WebSocket event.
         await alert_manager.broadcast(alert_data)
 
     return {
         "status": status,
         "component": component,
-        "alert": alert.to_dict() if alert else None,
+        "alert": alert.to_dict() if alert is not None else None,
     }
-
 # --------------------------------------------------
 # Unified observability overview
 # --------------------------------------------------
@@ -453,18 +529,18 @@ def get_observability_overview():
         if isinstance(component, dict)
     ]
 
-    # Kafka DOWN is considered CRITICAL because Kafka is
+        # Kafka DOWN is considered CRITICAL because Kafka is
     # the primary event-ingestion dependency.
-    if components.get("kafka", {}).get("status") == "DOWN":
+    kafka_component = components.get("kafka", {})
+
+    if (
+        isinstance(kafka_component, dict)
+        and kafka_component.get("status") == "DOWN"
+    ):
         statuses.append("CRITICAL")
     else:
-        statuses.extend(
-            status
-            for status in component_statuses
-            if status
-        )
 
-    overall_status = calculate_overall_status(statuses)
+        overall_status = calculate_overall_status(statuses)
 
     return {
         "quality": {
@@ -718,12 +794,47 @@ async def process_event(event: dict):
             anomaly_message
         )
 
-    # --------------------------------------------------
+             # --------------------------------------------------
     # Broadcast intelligent anomaly alert/recovery
     # --------------------------------------------------
 
     if anomaly_alert is not None:
 
+        if anomaly_alert["type"] == "QUALITY_ANOMALY_ALERT":
+
+            lifecycle_alert, lifecycle_created = (
+                alert_lifecycle.create_alert(
+                    alert_type="QUALITY_ANOMALY_ALERT",
+                    severity=anomaly_alert["severity"],
+                    component="quality-anomaly",
+                    message=anomaly_alert["message"],
+                )
+            )
+
+            if lifecycle_created:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_CREATED",
+                        "alert": lifecycle_alert.to_dict(),
+                    }
+                )
+
+        elif anomaly_alert["type"] == "QUALITY_ANOMALY_RECOVERY":
+
+            resolved_alert = alert_lifecycle.resolve_condition(
+                alert_type="QUALITY_ANOMALY_ALERT",
+                component="quality-anomaly",
+            )
+
+            if resolved_alert is not None:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_RESOLVED",
+                        "alert": resolved_alert.to_dict(),
+                    }
+                )
+
+        # Preserve the existing anomaly WebSocket event.
         await alert_manager.broadcast(
             anomaly_alert
         )
@@ -741,23 +852,56 @@ async def process_event(event: dict):
 
         alert_data = alert.to_dict()
 
-        # Add unique history ID
+        # Resolve the lifecycle alert when quality recovers.
+        if alert.type == "QUALITY_RECOVERY":
+
+            resolved_alert = alert_lifecycle.resolve_condition(
+                alert_type="QUALITY_ALERT",
+                component="quality",
+            )
+
+            if resolved_alert is not None:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_RESOLVED",
+                        "alert": resolved_alert.to_dict(),
+                    }
+                )
+
+        # Create/update lifecycle alert for actual quality alerts.
+        elif alert.type == "QUALITY_ALERT":
+
+            lifecycle_alert, lifecycle_created = (
+                alert_lifecycle.create_alert(
+                    alert_type="QUALITY_ALERT",
+                    severity=alert.severity or "INFO",
+                    component="quality",
+                    message=alert.message,
+                )
+            )
+
+            if lifecycle_created:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_CREATED",
+                        "alert": lifecycle_alert.to_dict(),
+                    }
+                )
+
+        # Preserve the existing legacy alert history.
         alert_data["id"] = (
             f"alert-{len(alert_history) + 1:03d}"
         )
 
-        # Store newest alert
         alert_history.append(alert_data)
 
-        # Keep only the latest 100 alerts
         if len(alert_history) > MAX_ALERT_HISTORY:
             alert_history.pop(0)
 
         await alert_manager.broadcast(
             alert_data
-        )
-
-    # --------------------------------------------------
+        ) 
+         # --------------------------------------------------
     # Build pipeline performance metrics
     # --------------------------------------------------
 
@@ -827,10 +971,69 @@ async def process_event(event: dict):
         pipeline_status = current_pipeline_status
 
         if pipeline_transition is not None:
+
+            # --------------------------------------------------
+            # Connect pipeline status to alert lifecycle
+            # --------------------------------------------------
+
+            if current_pipeline_status == "HEALTHY":
+
+                resolved_alert = alert_lifecycle.resolve_condition(
+                    alert_type="PIPELINE_ALERT",
+                    component="pipeline",
+                )
+
+                if resolved_alert is not None:
+                    await alert_manager.broadcast(
+                        {
+                            "type": "ALERT_RESOLVED",
+                            "alert": resolved_alert.to_dict(),
+                        }
+                    )
+
+            elif current_pipeline_status == "DEGRADED":
+
+                lifecycle_alert, lifecycle_created = (
+                    alert_lifecycle.create_alert(
+                        alert_type="PIPELINE_ALERT",
+                        severity="WARNING",
+                        component="pipeline",
+                        message="Pipeline performance is degraded.",
+                    )
+                )
+
+                if lifecycle_created:
+                    await alert_manager.broadcast(
+                        {
+                            "type": "ALERT_CREATED",
+                            "alert": lifecycle_alert.to_dict(),
+                        }
+                    )
+
+            elif current_pipeline_status == "CRITICAL":
+
+                lifecycle_alert, lifecycle_created = (
+                    alert_lifecycle.create_alert(
+                        alert_type="PIPELINE_ALERT",
+                        severity="CRITICAL",
+                        component="pipeline",
+                        message="Pipeline performance is critical.",
+                    )
+                )
+
+                if lifecycle_created:
+                    await alert_manager.broadcast(
+                        {
+                            "type": "ALERT_CREATED",
+                            "alert": lifecycle_alert.to_dict(),
+                        }
+                    )
+
+            # Preserve the existing pipeline WebSocket event.
             await alert_manager.broadcast(
                 pipeline_transition
-            )
-
+            )    
+            
     # --------------------------------------------------
     # Broadcast unified observability overview
     # --------------------------------------------------

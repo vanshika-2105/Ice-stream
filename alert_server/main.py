@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import time
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-
+from alert_server.config import CORS_ORIGINS
 import sys
 from pathlib import Path
 
@@ -68,7 +68,7 @@ def calculate_overall_status(statuses: list[str]) -> str:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,6 +1,8 @@
-from dataclasses import dataclass
+﻿from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
+
+from alert_server.logging_config import logger
 
 
 ACTIVE = "ACTIVE"
@@ -53,7 +55,7 @@ class AlertLifecycleManager:
               |
         ACKNOWLEDGED
               |
-       resolve/recovery
+        resolve/recovery
               |
           RESOLVED
     """
@@ -80,9 +82,7 @@ class AlertLifecycleManager:
         alert_type: str,
         component: str,
     ) -> str:
-        """
-        Build the deduplication key for an ongoing condition.
-        """
+        """Build the deduplication key for an ongoing condition."""
         return f"{alert_type}:{component}"
 
     def create_alert(
@@ -120,6 +120,14 @@ class AlertLifecycleManager:
                 # another active alert.
                 alert.severity = severity
                 alert.message = message
+
+                logger.debug(
+                    "Existing alert updated through deduplication",
+                    extra={
+                        "component": "alert_lifecycle",
+                    },
+                )
+
                 return alert, False
 
         alert = LifecycleAlert(
@@ -134,6 +142,16 @@ class AlertLifecycleManager:
 
         self.active_alerts[alert.alert_id] = alert
 
+        logger.info(
+            f"Alert created id={alert.alert_id} "
+            f"type={alert.alert_type} "
+            f"severity={alert.severity} "
+            f"component={alert.component}",
+            extra={
+                "component": "alert_lifecycle",
+            },
+        )
+
         return alert, True
 
     def acknowledge(self, alert_id: str) -> Optional[LifecycleAlert]:
@@ -146,10 +164,25 @@ class AlertLifecycleManager:
         alert = self.active_alerts.get(alert_id)
 
         if alert is None:
+            logger.warning(
+                f"Alert acknowledgement requested for unknown id={alert_id}",
+                extra={
+                    "component": "alert_lifecycle",
+                },
+            )
             return None
 
         if alert.status == ACTIVE:
             alert.status = ACKNOWLEDGED
+
+            logger.info(
+                f"Alert acknowledged id={alert.alert_id} "
+                f"type={alert.alert_type} "
+                f"component={alert.component}",
+                extra={
+                    "component": "alert_lifecycle",
+                },
+            )
 
         return alert
 
@@ -161,6 +194,12 @@ class AlertLifecycleManager:
         alert = self.active_alerts.pop(alert_id, None)
 
         if alert is None:
+            logger.warning(
+                f"Alert resolution requested for unknown id={alert_id}",
+                extra={
+                    "component": "alert_lifecycle",
+                },
+            )
             return None
 
         alert.status = RESOLVED
@@ -170,6 +209,15 @@ class AlertLifecycleManager:
 
         if len(self.alert_history) > self.max_history:
             self.alert_history.pop(0)
+
+        logger.info(
+            f"Alert resolved id={alert.alert_id} "
+            f"type={alert.alert_type} "
+            f"component={alert.component}",
+            extra={
+                "component": "alert_lifecycle",
+            },
+        )
 
         return alert
 

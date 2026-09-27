@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
+﻿from datetime import datetime, timezone
 import time
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from uuid import uuid4
 from fastapi.middleware.cors import CORSMiddleware
 from alert_server.config import CORS_ORIGINS
+from alert_server.logging_config import logger, set_request_id, clear_request_id, get_recent_logs
 import sys
 from pathlib import Path
 
@@ -41,6 +43,49 @@ app = FastAPI(
     description="Backend service for streaming data quality alerts",
     version="0.3.0",
 )
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """Log HTTP requests with a correlation ID and processing time."""
+
+    request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    set_request_id(request_id)
+
+    start_time = time.perf_counter()
+
+    try:
+        logger.info(
+            f"{request.method} {request.url.path} request started",
+            extra={"component": "http"},
+        )
+
+        response = await call_next(request)
+
+        duration_ms = (time.perf_counter() - start_time) * 1000
+
+        logger.info(
+            f"{request.method} {request.url.path} -> "
+            f"{response.status_code} -> {duration_ms:.2f}ms",
+            extra={"component": "http"},
+        )
+
+        response.headers["X-Request-ID"] = request_id
+
+        return response
+
+    except Exception:
+        duration_ms = (time.perf_counter() - start_time) * 1000
+
+        logger.exception(
+            f"{request.method} {request.url.path} failed "
+            f"after {duration_ms:.2f}ms",
+            extra={"component": "http"},
+        )
+
+        raise
+
+    finally:
+        clear_request_id()
 
 def calculate_overall_status(statuses: list[str]) -> str:
     """Calculate the overall observability status."""
@@ -256,6 +301,23 @@ def get_quality_status():
 
     metrics = quality_metrics.get_metrics()
 
+    quality_status = alert_engine.get_status(
+        metrics["quality_score"]
+    )
+
+    quality_score = metrics["quality_score"]
+
+    if quality_status in ("WARNING", "CRITICAL"):
+        logger.warning(
+            f"Quality status={quality_status} score={quality_score:.2f}",
+            extra={"component": "quality"},
+        )
+    else:
+        logger.info(
+            f"Quality validation status={quality_status} score={quality_score:.2f}",
+            extra={"component": "quality"},
+        )
+
     return {
         "status": alert_engine.get_status(
             metrics["quality_score"]
@@ -320,7 +382,29 @@ def get_pipeline_metrics():
         latencies_ms=pipeline_latencies_ms,
     )
 
-    return pipeline_metrics_to_dict(pipeline_metrics)
+    pipeline_data = pipeline_metrics_to_dict(pipeline_metrics)
+    pipeline_status = pipeline_data["status"]
+
+    pipeline_log_method = (
+        logger.warning
+        if pipeline_status in ("DEGRADED", "CRITICAL")
+        else logger.info
+    )
+
+    throughput = pipeline_data["throughput_eps"]
+    latency = pipeline_data["average_latency_ms"]
+    dlq_rate = pipeline_data["dlq_rate"]
+
+    pipeline_log_method(
+        f"Pipeline status={pipeline_status} "
+        f"throughput={throughput:.2f}eps "
+        f"latency={latency:.2f}ms "
+        f"dlq_rate={dlq_rate:.2f}%",
+        extra={"component": "pipeline"},
+    )
+
+    return pipeline_data
+
 # --------------------------------------------------
 # Pipeline performance status
 # --------------------------------------------------
@@ -569,6 +653,25 @@ def get_observability_overview():
         "overall_status": overall_status,
     }
 # --------------------------------------------------
+# Observability logs
+# --------------------------------------------------
+
+@app.get("/observability/logs")
+def get_observability_logs(limit: int = 100):
+    """Return recent bounded backend observability events."""
+
+    logs = get_recent_logs(limit)
+
+    logger.info(
+        f"Observability logs requested count={len(logs)}",
+        extra={"component": "observability"},
+    )
+
+    return {
+        "logs": logs,
+        "count": len(logs),
+    }
+
 # Observability insights
 # --------------------------------------------------
 
@@ -1089,3 +1192,8 @@ async def websocket_alerts(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         alert_manager.disconnect(websocket)
+
+
+
+
+

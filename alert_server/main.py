@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
+﻿from datetime import datetime, timezone
 import time
+<<<<<<< HEAD
 from fastapi import (
     FastAPI,
     WebSocket,
@@ -7,8 +8,13 @@ from fastapi import (
     HTTPException,
     Request,
 )
+=======
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from uuid import uuid4
+>>>>>>> feature/quality-backend
 from fastapi.middleware.cors import CORSMiddleware
-
+from alert_server.config import CORS_ORIGINS
+from alert_server.logging_config import logger, set_request_id, clear_request_id, get_recent_logs
 import sys
 from pathlib import Path
 from alert_server.config import (
@@ -36,8 +42,9 @@ from alert_server.system_alerts import SystemAlertEngine
 from alert_server.retry import retry_call
 from alert_server.recovery_metrics import RecoveryMetrics
 from alert_server.circuit_breaker import CircuitBreaker
-
+from alert_server.alert_lifecycle import AlertLifecycleManager
 from alerts import AlertEngine
+
 from metrics import QualityMetrics
 from models import QualityMetricSnapshot
 from validator import validate_checkout_event
@@ -104,6 +111,49 @@ async def add_security_headers(request: Request, call_next):
 
     return response
 
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """Log HTTP requests with a correlation ID and processing time."""
+
+    request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    set_request_id(request_id)
+
+    start_time = time.perf_counter()
+
+    try:
+        logger.info(
+            f"{request.method} {request.url.path} request started",
+            extra={"component": "http"},
+        )
+
+        response = await call_next(request)
+
+        duration_ms = (time.perf_counter() - start_time) * 1000
+
+        logger.info(
+            f"{request.method} {request.url.path} -> "
+            f"{response.status_code} -> {duration_ms:.2f}ms",
+            extra={"component": "http"},
+        )
+
+        response.headers["X-Request-ID"] = request_id
+
+        return response
+
+    except Exception:
+        duration_ms = (time.perf_counter() - start_time) * 1000
+
+        logger.exception(
+            f"{request.method} {request.url.path} failed "
+            f"after {duration_ms:.2f}ms",
+            extra={"component": "http"},
+        )
+
+        raise
+
+    finally:
+        clear_request_id()
+
 def calculate_overall_status(statuses: list[str]) -> str:
     """Calculate the overall observability status."""
 
@@ -136,7 +186,11 @@ def calculate_overall_status(statuses: list[str]) -> str:
 
 app.add_middleware(
     CORSMiddleware,
+<<<<<<< HEAD
     allow_origins=ALLOWED_ORIGINS,
+=======
+    allow_origins=CORS_ORIGINS,
+>>>>>>> feature/quality-backend
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -148,6 +202,7 @@ app.add_middleware(
 # --------------------------------------------------
 
 alert_manager = AlertManager()
+alert_lifecycle = AlertLifecycleManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
 live_aggregator = LiveAggregator()
@@ -319,10 +374,52 @@ def get_metrics():
 
 @app.get("/alerts")
 def get_alerts():
-    """Return recent quality and system alert history."""
+    """Return an alert lifecycle summary."""
+
+    return alert_lifecycle.summary()
+
+
+@app.get("/alerts/active")
+def get_active_alerts():
+    """Return currently active and acknowledged alerts."""
 
     return {
-        "alerts": alert_history
+        "alerts": alert_lifecycle.get_active()
+    }
+
+
+@app.get("/alerts/history")
+def get_alert_history():
+    """Return resolved alert history."""
+
+    return {
+        "alerts": alert_lifecycle.get_history()
+    }
+
+
+@app.post("/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: str):
+    """Acknowledge an active alert."""
+
+    alert = alert_lifecycle.acknowledge(alert_id)
+
+    if alert is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Alert {alert_id} not found",
+        )
+
+    alert_data = alert.to_dict()
+
+    await alert_manager.broadcast(
+        {
+            "type": "ALERT_ACKNOWLEDGED",
+            "alert": alert_data,
+        }
+    )
+
+    return {
+        "alert": alert_data
     }
 
 
@@ -335,6 +432,23 @@ def get_quality_status():
     """Return the current data-quality state and metrics."""
 
     metrics = quality_metrics.get_metrics()
+
+    quality_status = alert_engine.get_status(
+        metrics["quality_score"]
+    )
+
+    quality_score = metrics["quality_score"]
+
+    if quality_status in ("WARNING", "CRITICAL"):
+        logger.warning(
+            f"Quality status={quality_status} score={quality_score:.2f}",
+            extra={"component": "quality"},
+        )
+    else:
+        logger.info(
+            f"Quality validation status={quality_status} score={quality_score:.2f}",
+            extra={"component": "quality"},
+        )
 
     return {
         "status": alert_engine.get_status(
@@ -400,6 +514,7 @@ def get_pipeline_metrics():
         latencies_ms=pipeline_latencies_ms,
     )
 
+<<<<<<< HEAD
     response = pipeline_metrics_to_dict(
         pipeline_metrics
     )
@@ -424,6 +539,31 @@ def get_pipeline_metrics():
     )
 
     return response
+=======
+    pipeline_data = pipeline_metrics_to_dict(pipeline_metrics)
+    pipeline_status = pipeline_data["status"]
+
+    pipeline_log_method = (
+        logger.warning
+        if pipeline_status in ("DEGRADED", "CRITICAL")
+        else logger.info
+    )
+
+    throughput = pipeline_data["throughput_eps"]
+    latency = pipeline_data["average_latency_ms"]
+    dlq_rate = pipeline_data["dlq_rate"]
+
+    pipeline_log_method(
+        f"Pipeline status={pipeline_status} "
+        f"throughput={throughput:.2f}eps "
+        f"latency={latency:.2f}ms "
+        f"dlq_rate={dlq_rate:.2f}%",
+        extra={"component": "pipeline"},
+    )
+
+    return pipeline_data
+
+>>>>>>> feature/quality-backend
 # --------------------------------------------------
 # Pipeline performance status
 # --------------------------------------------------
@@ -628,9 +768,41 @@ async def update_system_component(
     )
 
     if alert is not None:
-
         alert_data = alert.to_dict()
 
+        if alert.type == "SYSTEM_ALERT":
+            lifecycle_alert, lifecycle_created = (
+                alert_lifecycle.create_alert(
+                    alert_type="SYSTEM_ALERT",
+                    severity=alert.severity,
+                    component=alert.component,
+                    message=alert.message,
+                )
+            )
+
+            if lifecycle_created:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_CREATED",
+                        "alert": lifecycle_alert.to_dict(),
+                    }
+                )
+
+        elif alert.type == "SYSTEM_RECOVERY":
+            resolved_alert = alert_lifecycle.resolve_condition(
+                alert_type="SYSTEM_ALERT",
+                component=alert.component,
+            )
+
+            if resolved_alert is not None:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_RESOLVED",
+                        "alert": resolved_alert.to_dict(),
+                    }
+                )
+
+        # Preserve the existing system alert history.
         alert_data["id"] = (
             f"system-alert-{len(alert_history) + 1:03d}"
         )
@@ -640,13 +812,15 @@ async def update_system_component(
         if len(alert_history) > MAX_ALERT_HISTORY:
             alert_history.pop(0)
 
+        # Preserve the existing WebSocket event.
         await alert_manager.broadcast(alert_data)
 
     return {
         "status": status,
         "component": component,
-        "alert": alert.to_dict() if alert else None,
+        "alert": alert.to_dict() if alert is not None else None,
     }
+<<<<<<< HEAD
 
 
 @app.get("/observability/live")
@@ -670,6 +844,8 @@ def get_live_observability():
             else None
         ),
     }
+=======
+>>>>>>> feature/quality-backend
 # --------------------------------------------------
 # Unified observability overview
 # --------------------------------------------------
@@ -697,18 +873,22 @@ def get_observability_overview():
         if isinstance(status, str)
     ]
 
-    # Kafka DOWN is considered CRITICAL because Kafka is
+        # Kafka DOWN is considered CRITICAL because Kafka is
     # the primary event-ingestion dependency.
+<<<<<<< HEAD
     if components.get("kafka") == "DOWN":
+=======
+    kafka_component = components.get("kafka", {})
+
+    if (
+        isinstance(kafka_component, dict)
+        and kafka_component.get("status") == "DOWN"
+    ):
+>>>>>>> feature/quality-backend
         statuses.append("CRITICAL")
     else:
-        statuses.extend(
-            status
-            for status in component_statuses
-            if status
-        )
 
-    overall_status = calculate_overall_status(statuses)
+        overall_status = calculate_overall_status(statuses)
 
     return {
         "quality": {
@@ -738,6 +918,25 @@ def get_observability_overview():
         "overall_status": overall_status,
     }
 # --------------------------------------------------
+# Observability logs
+# --------------------------------------------------
+
+@app.get("/observability/logs")
+def get_observability_logs(limit: int = 100):
+    """Return recent bounded backend observability events."""
+
+    logs = get_recent_logs(limit)
+
+    logger.info(
+        f"Observability logs requested count={len(logs)}",
+        extra={"component": "observability"},
+    )
+
+    return {
+        "logs": logs,
+        "count": len(logs),
+    }
+
 # Observability insights
 # --------------------------------------------------
 
@@ -972,12 +1171,47 @@ async def process_event(event: dict):
             anomaly_message
         )
 
-    # --------------------------------------------------
+             # --------------------------------------------------
     # Broadcast intelligent anomaly alert/recovery
     # --------------------------------------------------
 
     if anomaly_alert is not None:
 
+        if anomaly_alert["type"] == "QUALITY_ANOMALY_ALERT":
+
+            lifecycle_alert, lifecycle_created = (
+                alert_lifecycle.create_alert(
+                    alert_type="QUALITY_ANOMALY_ALERT",
+                    severity=anomaly_alert["severity"],
+                    component="quality-anomaly",
+                    message=anomaly_alert["message"],
+                )
+            )
+
+            if lifecycle_created:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_CREATED",
+                        "alert": lifecycle_alert.to_dict(),
+                    }
+                )
+
+        elif anomaly_alert["type"] == "QUALITY_ANOMALY_RECOVERY":
+
+            resolved_alert = alert_lifecycle.resolve_condition(
+                alert_type="QUALITY_ANOMALY_ALERT",
+                component="quality-anomaly",
+            )
+
+            if resolved_alert is not None:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_RESOLVED",
+                        "alert": resolved_alert.to_dict(),
+                    }
+                )
+
+        # Preserve the existing anomaly WebSocket event.
         await alert_manager.broadcast(
             anomaly_alert
         )
@@ -995,23 +1229,56 @@ async def process_event(event: dict):
 
         alert_data = alert.to_dict()
 
-        # Add unique history ID
+        # Resolve the lifecycle alert when quality recovers.
+        if alert.type == "QUALITY_RECOVERY":
+
+            resolved_alert = alert_lifecycle.resolve_condition(
+                alert_type="QUALITY_ALERT",
+                component="quality",
+            )
+
+            if resolved_alert is not None:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_RESOLVED",
+                        "alert": resolved_alert.to_dict(),
+                    }
+                )
+
+        # Create/update lifecycle alert for actual quality alerts.
+        elif alert.type == "QUALITY_ALERT":
+
+            lifecycle_alert, lifecycle_created = (
+                alert_lifecycle.create_alert(
+                    alert_type="QUALITY_ALERT",
+                    severity=alert.severity or "INFO",
+                    component="quality",
+                    message=alert.message,
+                )
+            )
+
+            if lifecycle_created:
+                await alert_manager.broadcast(
+                    {
+                        "type": "ALERT_CREATED",
+                        "alert": lifecycle_alert.to_dict(),
+                    }
+                )
+
+        # Preserve the existing legacy alert history.
         alert_data["id"] = (
             f"alert-{len(alert_history) + 1:03d}"
         )
 
-        # Store newest alert
         alert_history.append(alert_data)
 
-        # Keep only the latest 100 alerts
         if len(alert_history) > MAX_ALERT_HISTORY:
             alert_history.pop(0)
 
         await alert_manager.broadcast(
             alert_data
-        )
-
-    # --------------------------------------------------
+        ) 
+         # --------------------------------------------------
     # Build pipeline performance metrics
     # --------------------------------------------------
 
@@ -1097,10 +1364,69 @@ async def process_event(event: dict):
         pipeline_status = current_pipeline_status
 
         if pipeline_transition is not None:
+
+            # --------------------------------------------------
+            # Connect pipeline status to alert lifecycle
+            # --------------------------------------------------
+
+            if current_pipeline_status == "HEALTHY":
+
+                resolved_alert = alert_lifecycle.resolve_condition(
+                    alert_type="PIPELINE_ALERT",
+                    component="pipeline",
+                )
+
+                if resolved_alert is not None:
+                    await alert_manager.broadcast(
+                        {
+                            "type": "ALERT_RESOLVED",
+                            "alert": resolved_alert.to_dict(),
+                        }
+                    )
+
+            elif current_pipeline_status == "DEGRADED":
+
+                lifecycle_alert, lifecycle_created = (
+                    alert_lifecycle.create_alert(
+                        alert_type="PIPELINE_ALERT",
+                        severity="WARNING",
+                        component="pipeline",
+                        message="Pipeline performance is degraded.",
+                    )
+                )
+
+                if lifecycle_created:
+                    await alert_manager.broadcast(
+                        {
+                            "type": "ALERT_CREATED",
+                            "alert": lifecycle_alert.to_dict(),
+                        }
+                    )
+
+            elif current_pipeline_status == "CRITICAL":
+
+                lifecycle_alert, lifecycle_created = (
+                    alert_lifecycle.create_alert(
+                        alert_type="PIPELINE_ALERT",
+                        severity="CRITICAL",
+                        component="pipeline",
+                        message="Pipeline performance is critical.",
+                    )
+                )
+
+                if lifecycle_created:
+                    await alert_manager.broadcast(
+                        {
+                            "type": "ALERT_CREATED",
+                            "alert": lifecycle_alert.to_dict(),
+                        }
+                    )
+
+            # Preserve the existing pipeline WebSocket event.
             await alert_manager.broadcast(
                 pipeline_transition
-            )
-
+            )    
+            
     # --------------------------------------------------
     # Broadcast unified observability overview
     # --------------------------------------------------
@@ -1220,6 +1546,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         alert_manager.disconnect(websocket)
 
+<<<<<<< HEAD
     except Exception:
         alert_manager.disconnect(websocket)
 
@@ -1232,3 +1559,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
     except Exception:
         alert_manager.disconnect(websocket)
+=======
+
+
+
+
+>>>>>>> feature/quality-backend

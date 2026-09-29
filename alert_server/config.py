@@ -1,122 +1,37 @@
+
 import os
+from pathlib import Path
 
 
-def get_int_env(name: str, default: int) -> int:
-    """Read an integer environment variable safely."""
-    value = os.getenv(name)
+# Load simple KEY=VALUE pairs from the project .env file.
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
-    if value is None:
-        return default
+if ENV_FILE.exists():
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
 
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(
-            f"{name} must be a valid integer"
-        ) from exc
+        if not line or line.startswith("#") or "=" not in line:
+            continue
 
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
 
-def get_bool_env(name: str, default: bool) -> bool:
-    """Read a boolean environment variable safely."""
-    value = os.getenv(name)
-
-    if value is None:
-        return default
-
-    normalized = value.strip().lower()
-
-    if normalized in {"true", "1", "yes", "on"}:
-        return True
-
-    if normalized in {"false", "0", "no", "off"}:
-        return False
-
-    raise ValueError(
-        f"{name} must be a boolean value"
-    )
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
-def get_list_env(name: str, default: list[str]) -> list[str]:
-    """Read a comma-separated environment variable."""
-    value = os.getenv(name)
-
-    if value is None:
-        return default
-
-    return [
-        item.strip()
-        for item in value.split(",")
-        if item.strip()
-    ]
-
-
-# --------------------------------------------------
-# Server configuration
-# --------------------------------------------------
+APP_ENV = os.getenv("APP_ENV", "development")
 
 HOST = os.getenv("HOST", "0.0.0.0")
 
-PORT = get_int_env(
-    "PORT",
-    8000,
-)
+PORT = int(os.getenv("PORT", "8000"))
 
-
-# --------------------------------------------------
-# Environment configuration
-# --------------------------------------------------
-
-ENVIRONMENT = os.getenv(
-    "ENVIRONMENT",
-    "development",
-)
-
-DEBUG = get_bool_env(
-    "DEBUG",
-    ENVIRONMENT == "development",
-)
-
-
-# --------------------------------------------------
-# CORS configuration
-# --------------------------------------------------
-
-ALLOWED_ORIGINS = get_list_env(
-    "ALLOWED_ORIGINS",
-    ["http://localhost:5173"],
-)
-
-
-# --------------------------------------------------
-# Streaming configuration
-# --------------------------------------------------
-
-KAFKA_BOOTSTRAP_SERVERS = os.getenv(
-    "KAFKA_BOOTSTRAP_SERVERS",
-    "localhost:9092",
-)
-
-ICEBERG_URL = os.getenv(
-    "ICEBERG_URL",
-    "http://localhost:8181",
-)
-
-
-# --------------------------------------------------
-# WebSocket configuration
-# --------------------------------------------------
-
-WEBSOCKET_UPDATE_INTERVAL_SECONDS = get_int_env(
-    "WEBSOCKET_UPDATE_INTERVAL_SECONDS",
-    1,
-)
-
-
-# --------------------------------------------------
-# Performance history
-# --------------------------------------------------
-
-PERFORMANCE_HISTORY_SIZE = get_int_env(
-    "PERFORMANCE_HISTORY_SIZE",
-    100,
-)
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173",
+    ).split(",")
+    if origin.strip()
+]

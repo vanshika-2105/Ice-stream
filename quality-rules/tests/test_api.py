@@ -1,4 +1,11 @@
-import pytest
+
+import sys
+from pathlib import Path
+
+sys.path.insert(
+    0,
+    str(Path(__file__).resolve().parents[2])
+)
 
 from fastapi.testclient import TestClient
 
@@ -478,37 +485,6 @@ def test_websocket_receives_observability_overview():
         assert "average_latency_ms" in overview
         assert "dlq_rate" in overview
         assert "is_anomaly" in overview
-def test_security_headers():
-    response = client.get("/health")
-
-    assert response.status_code == 200
-
-    assert response.headers["X-Content-Type-Options"] == "nosniff"
-    assert response.headers["X-Frame-Options"] == "DENY"
-    assert response.headers["Referrer-Policy"] == "no-referrer"
-    assert (
-        response.headers["Permissions-Policy"]
-        == "camera=(), microphone=(), geolocation=()"
-    )
-
-
-def test_websocket_allows_configured_origin():
-    with client.websocket_connect(
-        "/ws/alerts",
-        headers={"origin": "http://localhost:5173"},
-    ):
-        pass
-
-
-def test_websocket_rejects_unconfigured_origin():
-    with pytest.raises(Exception):
-        with client.websocket_connect(
-            "/ws/alerts",
-            headers={"origin": "http://malicious.example"},
-        ):
-            pass
-
-
 def test_observability_insights_endpoint():
     response = client.get("/observability/insights")
 

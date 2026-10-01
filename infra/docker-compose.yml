@@ -29,6 +29,19 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
 
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh",
+          "--bootstrap-server",
+          "localhost:9092"
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
 
   # ============================================================
   # MINIO
@@ -42,16 +55,33 @@ services:
       - "9001:9001"
 
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_DOMAIN: minio
 
-    command: server /data --console-address ":9001"
+    command:
+      - server
+      - /data
+      - --console-address
+      - ":9001"
 
     networks:
       default:
         aliases:
           - warehouse.minio
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:9000/minio/health/live"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 
   # ============================================================
@@ -65,8 +95,8 @@ services:
       - "8181:8181"
 
     environment:
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_REGION: us-east-1
 
       CATALOG_WAREHOUSE: s3://warehouse/
@@ -75,11 +105,11 @@ services:
       CATALOG_S3_ENDPOINT: http://minio:9000
       CATALOG_S3_PATH__STYLE__ACCESS: "true"
 
-      # Day 14: explicit JDBC catalog configuration
+      # JDBC catalog configuration
       CATALOG_CATALOG__IMPL: org.apache.iceberg.jdbc.JdbcCatalog
       CATALOG_URI: jdbc:sqlite:/tmp/iceberg_rest.db?busy_timeout=30000
-      CATALOG_JDBC_USER: user
-      CATALOG_JDBC_PASSWORD: password
+      CATALOG_JDBC_USER: ${CATALOG_JDBC_USER}
+      CATALOG_JDBC_PASSWORD: ${CATALOG_JDBC_PASSWORD}
 
     depends_on:
       - minio
@@ -129,6 +159,19 @@ services:
     depends_on:
       - kafka
       - iceberg-rest
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:8081/overview"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 
   # ============================================================

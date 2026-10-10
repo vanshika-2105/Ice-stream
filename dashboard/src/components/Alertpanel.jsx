@@ -1,8 +1,8 @@
- function AlertPanel({ alert, alerts = [] }) {
+  function AlertPanel({ alert, alerts = [] }) {
   const getIcon = (severity) => {
-    if (severity === "CRITICAL") return "🚨";
-    if (severity === "WARNING") return "⚠";
-    if (severity === "RECOVERY") return "✓";
+    if (severity === "CRITICAL") return "";
+    if (severity === "WARNING") return "";
+    if (severity === "RECOVERY") return "";
     return "ℹ";
   };
 

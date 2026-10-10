@@ -10,6 +10,7 @@ class SystemAlert:
     status: str
     message: str
     timestamp: str
+    status: str
 
     def to_dict(self) -> dict:
         return {
@@ -19,6 +20,7 @@ class SystemAlert:
             "status": self.status,
             "message": self.message,
             "timestamp": self.timestamp,
+            "status": self.status,
         }
 
 
@@ -68,6 +70,7 @@ class SystemAlertEngine:
                 status="RECOVERED",
                 message=message or f"{component} connection restored",
                 timestamp=datetime.now(timezone.utc).isoformat(),
+
             )
 
             self.alert_history.append(alert.to_dict())

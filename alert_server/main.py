@@ -1,6 +1,7 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
+from fastapi.responses import JSONResponse
 import time
-<<<<<<< HEAD
+from uuid import uuid4
 from fastapi import (
     FastAPI,
     WebSocket,
@@ -8,17 +9,14 @@ from fastapi import (
     HTTPException,
     Request,
 )
-=======
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from uuid import uuid4
->>>>>>> feature/quality-backend
 from fastapi.middleware.cors import CORSMiddleware
 from alert_server.config import CORS_ORIGINS
 from alert_server.logging_config import logger, set_request_id, clear_request_id, get_recent_logs
 import sys
 from pathlib import Path
 from alert_server.config import (
-    ALLOWED_ORIGINS,
+    CORS_ORIGINS,
     WEBSOCKET_UPDATE_INTERVAL_SECONDS,
     PERFORMANCE_HISTORY_SIZE,
 )
@@ -92,10 +90,15 @@ async def handle_unexpected_error(
 ):
     """Return a safe response for unexpected server errors."""
 
-    return {
-        "error": "Internal server error",
-        "detail": "Service temporarily unavailable",
-    }
+
+    return JSONResponse(
+       status_code=500,
+       content={
+           "error": "Internal server error",
+           "detail": "Service temporarily unavailable",
+        },
+    )
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     """Add basic security headers to HTTP responses."""
@@ -186,11 +189,7 @@ def calculate_overall_status(statuses: list[str]) -> str:
 
 app.add_middleware(
     CORSMiddleware,
-<<<<<<< HEAD
-    allow_origins=ALLOWED_ORIGINS,
-=======
     allow_origins=CORS_ORIGINS,
->>>>>>> feature/quality-backend
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -514,9 +513,28 @@ def get_pipeline_metrics():
         latencies_ms=pipeline_latencies_ms,
     )
 
-<<<<<<< HEAD
     response = pipeline_metrics_to_dict(
         pipeline_metrics
+    )
+
+    pipeline_status = response["status"]
+
+    pipeline_log_method = (
+        logger.warning
+        if pipeline_status in ("DEGRADED", "CRITICAL")
+        else logger.info
+    )
+
+    throughput = response["throughput_eps"]
+    latency = response["average_latency_ms"]
+    dlq_rate = response["dlq_rate"]
+
+    pipeline_log_method(
+        f"Pipeline status={pipeline_status} "
+        f"throughput={throughput:.2f}eps "
+        f"latency={latency:.2f}ms "
+        f"dlq_rate={dlq_rate:.2f}%",
+        extra={"component": "pipeline"},
     )
 
     percentiles = calculate_latency_percentiles(
@@ -539,31 +557,6 @@ def get_pipeline_metrics():
     )
 
     return response
-=======
-    pipeline_data = pipeline_metrics_to_dict(pipeline_metrics)
-    pipeline_status = pipeline_data["status"]
-
-    pipeline_log_method = (
-        logger.warning
-        if pipeline_status in ("DEGRADED", "CRITICAL")
-        else logger.info
-    )
-
-    throughput = pipeline_data["throughput_eps"]
-    latency = pipeline_data["average_latency_ms"]
-    dlq_rate = pipeline_data["dlq_rate"]
-
-    pipeline_log_method(
-        f"Pipeline status={pipeline_status} "
-        f"throughput={throughput:.2f}eps "
-        f"latency={latency:.2f}ms "
-        f"dlq_rate={dlq_rate:.2f}%",
-        extra={"component": "pipeline"},
-    )
-
-    return pipeline_data
-
->>>>>>> feature/quality-backend
 # --------------------------------------------------
 # Pipeline performance status
 # --------------------------------------------------
@@ -676,9 +669,11 @@ def get_component_health():
 
     backend_health = check_backend()
 
+
     websocket_health = check_websocket(
-        alert_manager.get_connection_state()
+       "CONNECTED" if alert_manager.clients else "DISCONNECTED"
     )
+
 
     iceberg_health = check_iceberg(
         system_components.get("iceberg")
@@ -711,10 +706,16 @@ def get_system_status():
 
     status = system_alert_engine.get_system_status()
 
+
     status["websocket"] = {
-        "status": alert_manager.get_connection_state(),
-        "connected_clients": len(alert_manager.clients),
-    }
+    "status": (
+        "CONNECTED"
+        if alert_manager.clients
+        else "DISCONNECTED"
+    ),
+    "connected_clients": len(alert_manager.clients),
+}
+
 
     status["health"] = get_component_health()
 
@@ -820,7 +821,7 @@ async def update_system_component(
         "component": component,
         "alert": alert.to_dict() if alert is not None else None,
     }
-<<<<<<< HEAD
+
 
 
 @app.get("/observability/live")
@@ -844,8 +845,7 @@ def get_live_observability():
             else None
         ),
     }
-=======
->>>>>>> feature/quality-backend
+
 # --------------------------------------------------
 # Unified observability overview
 # --------------------------------------------------
@@ -875,20 +875,10 @@ def get_observability_overview():
 
         # Kafka DOWN is considered CRITICAL because Kafka is
     # the primary event-ingestion dependency.
-<<<<<<< HEAD
     if components.get("kafka") == "DOWN":
-=======
-    kafka_component = components.get("kafka", {})
-
-    if (
-        isinstance(kafka_component, dict)
-        and kafka_component.get("status") == "DOWN"
-    ):
->>>>>>> feature/quality-backend
         statuses.append("CRITICAL")
-    else:
 
-        overall_status = calculate_overall_status(statuses)
+    overall_status = calculate_overall_status(statuses)
 
     return {
         "quality": {
@@ -1277,7 +1267,7 @@ async def process_event(event: dict):
 
         await alert_manager.broadcast(
             alert_data
-        ) 
+        )
          # --------------------------------------------------
     # Build pipeline performance metrics
     # --------------------------------------------------
@@ -1425,8 +1415,8 @@ async def process_event(event: dict):
             # Preserve the existing pipeline WebSocket event.
             await alert_manager.broadcast(
                 pipeline_transition
-            )    
-            
+            )
+
     # --------------------------------------------------
     # Broadcast unified observability overview
     # --------------------------------------------------
@@ -1498,7 +1488,7 @@ async def process_event(event: dict):
     await alert_manager.broadcast(
         overview_message
     )
-    
+
     # --------------------------------------------------
     # Broadcast observability insights
     # --------------------------------------------------
@@ -1533,7 +1523,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     origin = websocket.headers.get("origin")
 
-    if origin and origin not in ALLOWED_ORIGINS:
+    if origin and origin not in CORS_ORIGINS:
         await websocket.close(code=1008)
         return
 
@@ -1546,10 +1536,6 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         alert_manager.disconnect(websocket)
 
-<<<<<<< HEAD
-    except Exception:
-        alert_manager.disconnect(websocket)
-
     try:
         while True:
             await websocket.receive_text()
@@ -1559,9 +1545,3 @@ async def websocket_endpoint(websocket: WebSocket):
 
     except Exception:
         alert_manager.disconnect(websocket)
-=======
-
-
-
-
->>>>>>> feature/quality-backend

@@ -1,4 +1,4 @@
-  function QualityTrend({ history = [] }) {
+  function QualityTrend({ history = [], anomalies = [] }) {
   if (history.length === 0) {
     return (
       <section className="quality-trend">
@@ -25,13 +25,27 @@
     const y =
       height -
       padding -
-      (score / 100) * (height - padding * 2);
+      (score / 100) *
+        (height - padding * 2);
+
+    // Check whether this quality point is anomalous
+    const isAnomaly = anomalies.some((anomaly) => {
+      const anomalyTime = anomaly.timestamp;
+      const pointTime = item.timestamp;
+
+      return (
+        anomalyTime &&
+        pointTime &&
+        anomalyTime === pointTime
+      );
+    });
 
     return {
       x,
       y,
       score,
       timestamp: item.timestamp,
+      isAnomaly,
     };
   });
 
@@ -39,40 +53,50 @@
     .map((point) => `${point.x},${point.y}`)
     .join(" ");
 
+  // Determine trend
   let trend = "STABLE";
 
-if (history.length >= 2) {
-  const previous =
-    Number(history[history.length - 2].score) || 0;
+  if (history.length >= 2) {
+    const previous =
+      Number(
+        history[history.length - 2].score
+      ) || 0;
 
-  const latest =
-    Number(history[history.length - 1].score) || 0;
+    const latest =
+      Number(
+        history[history.length - 1].score
+      ) || 0;
 
-  const difference = latest - previous;
+    const difference = latest - previous;
 
-  if (difference > 1) {
-    trend = "UP";
-  } else if (difference < -1) {
-    trend = "DOWN";
+    if (difference > 1) {
+      trend = "UP";
+    } else if (difference < -1) {
+      trend = "DOWN";
+    }
   }
-}
 
   return (
     <section className="quality-trend">
+
       <div className="quality-trend-header">
         <h2>Quality Trend</h2>
 
-        <span className={`trend-indicator ${trend.toLowerCase()}`}>
+        <span
+          className={`trend-indicator ${trend.toLowerCase()}`}
+        >
           {trend}
         </span>
       </div>
 
       <div className="quality-chart-wrapper">
+
         <svg
           viewBox={`0 0 ${width} ${height}`}
           className="quality-chart"
           preserveAspectRatio="none"
         >
+
           {/* 100% line */}
           <line
             x1={padding}
@@ -103,7 +127,7 @@ if (history.length >= 2) {
             opacity="0.2"
           />
 
-          {/* Quality trend line */}
+          {/* Existing quality line */}
           <polyline
             points={linePoints}
             fill="none"
@@ -113,21 +137,47 @@ if (history.length >= 2) {
             strokeLinejoin="round"
           />
 
-          {/* Data points */}
+          {/* Quality points */}
           {points.map((point, index) => (
             <circle
               key={index}
               cx={point.x}
               cy={point.y}
-              r="5"
+              r={point.isAnomaly ? 8 : 5}
               fill="currentColor"
             />
           ))}
+
+          {/* Anomaly markers */}
+          {points
+            .filter((point) => point.isAnomaly)
+            .map((point, index) => (
+              <text
+                key={`anomaly-${index}`}
+                x={point.x}
+                y={point.y - 12}
+                textAnchor="middle"
+                fontSize="18"
+                fontWeight="bold"
+              >
+                ⚠
+              </text>
+            ))}
+
         </svg>
 
-        <div className="chart-label top">100%</div>
-        <div className="chart-label middle">50%</div>
-        <div className="chart-label bottom">0%</div>
+        <div className="chart-label top">
+          100%
+        </div>
+
+        <div className="chart-label middle">
+          50%
+        </div>
+
+        <div className="chart-label bottom">
+          0%
+        </div>
+
       </div>
 
       <div className="quality-history">
@@ -142,12 +192,15 @@ if (history.length >= 2) {
 
             <span>
               {item.timestamp
-                ? new Date(item.timestamp).toLocaleTimeString()
+                ? new Date(
+                    item.timestamp
+                  ).toLocaleTimeString()
                 : ""}
             </span>
           </div>
         ))}
       </div>
+
     </section>
   );
 }

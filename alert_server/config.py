@@ -35,3 +35,11 @@ CORS_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+
+WEBSOCKET_UPDATE_INTERVAL_SECONDS = float(
+    os.getenv("WEBSOCKET_UPDATE_INTERVAL_SECONDS", "1.0")
+)
+
+PERFORMANCE_HISTORY_SIZE = int(
+    os.getenv("PERFORMANCE_HISTORY_SIZE", "100")
+)

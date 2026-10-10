@@ -9,6 +9,7 @@ class SystemAlert:
     component: str
     message: str
     timestamp: str
+    status: str
 
     def to_dict(self) -> dict:
         return {
@@ -17,6 +18,7 @@ class SystemAlert:
             "component": self.component,
             "message": self.message,
             "timestamp": self.timestamp,
+            "status": self.status,
         }
 
 
@@ -49,6 +51,7 @@ class SystemAlertEngine:
                 component=component,
                 message=message or f"{component} connection unavailable",
                 timestamp=datetime.now(timezone.utc).isoformat(),
+                status="FAILED",
             )
 
             self.alert_history.append(alert.to_dict())
@@ -64,6 +67,7 @@ class SystemAlertEngine:
                 component=component,
                 message=message or f"{component} connection restored",
                 timestamp=datetime.now(timezone.utc).isoformat(),
+                status="RECOVERED"
             )
 
             self.alert_history.append(alert.to_dict())

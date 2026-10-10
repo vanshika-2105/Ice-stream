@@ -1,14 +1,33 @@
-﻿from datetime import datetime, timezone
+ï»¿from datetime import datetime, timezone
+from fastapi.responses import JSONResponse
 import time
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from uuid import uuid4
+from fastapi import (
+    FastAPI,
+    WebSocket,
+    WebSocketDisconnect,
+    HTTPException,
+    Request,
+)
 from uuid import uuid4
 from fastapi.middleware.cors import CORSMiddleware
 from alert_server.config import CORS_ORIGINS
 from alert_server.logging_config import logger, set_request_id, clear_request_id, get_recent_logs
 import sys
 from pathlib import Path
-
-
+from alert_server.config import (
+    CORS_ORIGINS,
+    WEBSOCKET_UPDATE_INTERVAL_SECONDS,
+    PERFORMANCE_HISTORY_SIZE,
+)
+ALLOWED_COMPONENTS = {
+    "kafka",
+    "producer",
+    "flink",
+    "backend",
+    "websocket",
+    "iceberg",
+}
 # Add quality-rules to Python path
 sys.path.insert(
     0,
@@ -18,6 +37,8 @@ sys.path.insert(
 
 from alert_server.alert_manager import AlertManager
 from alert_server.system_alerts import SystemAlertEngine
+from alert_server.retry import retry_call
+from alert_server.recovery_metrics import RecoveryMetrics
 from alert_server.circuit_breaker import CircuitBreaker
 from alert_server.alert_lifecycle import AlertLifecycleManager
 from alerts import AlertEngine
@@ -34,15 +55,64 @@ from profiler import (
 
 from pipeline_metrics import (
     build_pipeline_metrics,
+    build_performance_snapshot,
+    calculate_latency_percentiles,
+    performance_snapshot_to_dict,
     pipeline_metrics_to_dict,
 )
+
+from performance_history import PerformanceHistory
+from health_checks import (
+    check_kafka,
+    check_producer,
+    check_flink,
+    check_backend,
+    check_websocket,
+    check_iceberg,
+)
+from live_aggregator import LiveAggregator
 from insights import generate_insights
 
+# Live metrics broadcast state
+last_live_metrics_broadcast = 0.0
+LIVE_METRICS_INTERVAL_SECONDS = (
+    WEBSOCKET_UPDATE_INTERVAL_SECONDS
+)
 app = FastAPI(
     title="Ice-Stream Alert Server",
     description="Backend service for streaming data quality alerts",
     version="0.3.0",
 )
+@app.exception_handler(Exception)
+async def handle_unexpected_error(
+    request: Request,
+    exc: Exception,
+):
+    """Return a safe response for unexpected server errors."""
+
+
+    return JSONResponse(
+       status_code=500,
+       content={
+           "error": "Internal server error",
+           "detail": "Service temporarily unavailable",
+        },
+    )
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add basic security headers to HTTP responses."""
+
+    response = await call_next(request)
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=()"
+    )
+
+    return response
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
@@ -96,13 +166,19 @@ def calculate_overall_status(statuses: list[str]) -> str:
         if status
     }
 
-    if "CRITICAL" in normalized_statuses:
+    # Failed/critical components make the whole system critical.
+    if (
+        "CRITICAL" in normalized_statuses
+        or "FAILED" in normalized_statuses
+    ):
         return "CRITICAL"
 
+    # Degraded or recovering components make the system degraded.
     if (
         "DEGRADED" in normalized_statuses
         or "WARNING" in normalized_statuses
         or "DOWN" in normalized_statuses
+        or "RECOVERING" in normalized_statuses
     ):
         return "DEGRADED"
 
@@ -128,12 +204,18 @@ alert_manager = AlertManager()
 alert_lifecycle = AlertLifecycleManager()
 quality_metrics = QualityMetrics()
 alert_engine = AlertEngine()
+live_aggregator = LiveAggregator()
 
 # Pipeline performance state
 pipeline_start_time = None
 pipeline_elapsed_seconds = 0.0
 pipeline_latencies_ms = []
 pipeline_status = "HEALTHY"
+
+# Historical pipeline performance snapshots
+performance_history = PerformanceHistory(
+    max_size=PERFORMANCE_HISTORY_SIZE
+)
 
 # Data profiling state
 profile_event_type_counts = {}
@@ -143,7 +225,56 @@ profile_currency_counts = {}
 
 system_alert_engine = SystemAlertEngine()
 circuit_breaker = CircuitBreaker()
+recovery_metrics = RecoveryMetrics()
 
+def execute_with_resilience(func):
+    """
+    Execute a backend operation using the existing retry
+    and circuit-breaker mechanisms while recording recovery metrics.
+    """
+
+    if not circuit_breaker.can_execute():
+        recovery_metrics.record_circuit_transition(
+            circuit_breaker.state.value
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail="Dependency temporarily unavailable (circuit open)",
+        )
+
+    try:
+        result = retry_call(func)
+
+        previous_state = circuit_breaker.state
+
+        circuit_breaker.record_success()
+
+        recovery_metrics.current_circuit_state = (
+            circuit_breaker.state.value
+        )
+
+        if previous_state.value == "HALF_OPEN":
+            recovery_metrics.record_recovery("kafka")
+
+            recovery_metrics.record_circuit_transition(
+                circuit_breaker.state.value,
+                "kafka",
+            )
+
+        return result
+
+    except Exception:
+        circuit_breaker.record_failure()
+
+        recovery_metrics.record_failure("kafka")
+
+        recovery_metrics.record_circuit_transition(
+            circuit_breaker.state.value,
+            "kafka",
+        )
+
+        raise
 
 # --------------------------------------------------
 # In-memory alert history
@@ -382,8 +513,11 @@ def get_pipeline_metrics():
         latencies_ms=pipeline_latencies_ms,
     )
 
-    pipeline_data = pipeline_metrics_to_dict(pipeline_metrics)
-    pipeline_status = pipeline_data["status"]
+    response = pipeline_metrics_to_dict(
+        pipeline_metrics
+    )
+
+    pipeline_status = response["status"]
 
     pipeline_log_method = (
         logger.warning
@@ -391,9 +525,9 @@ def get_pipeline_metrics():
         else logger.info
     )
 
-    throughput = pipeline_data["throughput_eps"]
-    latency = pipeline_data["average_latency_ms"]
-    dlq_rate = pipeline_data["dlq_rate"]
+    throughput = response["throughput_eps"]
+    latency = response["average_latency_ms"]
+    dlq_rate = response["dlq_rate"]
 
     pipeline_log_method(
         f"Pipeline status={pipeline_status} "
@@ -403,8 +537,26 @@ def get_pipeline_metrics():
         extra={"component": "pipeline"},
     )
 
-    return pipeline_data
+    percentiles = calculate_latency_percentiles(
+        pipeline_latencies_ms
+    )
 
+    response.update(percentiles)
+
+    latest_snapshot = performance_history.get_latest()
+
+    response["performance_history"] = [
+        performance_snapshot_to_dict(snapshot)
+        for snapshot in performance_history.get_history()
+    ]
+
+    response["latest_snapshot"] = (
+        performance_snapshot_to_dict(latest_snapshot)
+        if latest_snapshot
+        else None
+    )
+
+    return response
 # --------------------------------------------------
 # Pipeline performance status
 # --------------------------------------------------
@@ -500,16 +652,74 @@ def get_quality_anomaly():
         "reason": result.reason,
     }
 
+def get_component_health():
+    """Return health checks for all known platform components."""
 
+    system_components = system_alert_engine.component_status
+
+    kafka_health = check_kafka(
+        system_components.get("kafka")
+    )
+
+    producer_health = check_producer(
+        live_aggregator.last_event_time
+    )
+
+    flink_health = check_flink(None)
+
+    backend_health = check_backend()
+
+
+    websocket_health = check_websocket(
+       "CONNECTED" if alert_manager.clients else "DISCONNECTED"
+    )
+
+
+    iceberg_health = check_iceberg(
+        system_components.get("iceberg")
+    )
+
+    health_results = [
+        kafka_health,
+        flink_health,
+        producer_health,
+        backend_health,
+        websocket_health,
+        iceberg_health,
+    ]
+
+    return {
+        health.component: {
+            "status": health.status,
+            "message": health.message,
+            "checked_at": health.checked_at.isoformat(),
+        }
+        for health in health_results
+    }
 # --------------------------------------------------
 # System status
 # --------------------------------------------------
 
 @app.get("/system/status")
 def get_system_status():
-    """Return the current infrastructure system status."""
+    """Return the current infrastructure and component health status."""
 
-    return system_alert_engine.get_system_status()
+    status = system_alert_engine.get_system_status()
+
+
+    status["websocket"] = {
+    "status": (
+        "CONNECTED"
+        if alert_manager.clients
+        else "DISCONNECTED"
+    ),
+    "connected_clients": len(alert_manager.clients),
+}
+
+
+    status["health"] = get_component_health()
+
+    return status
 
 
 @app.post("/system/components/{component}")
@@ -519,6 +729,14 @@ async def update_system_component(
 ):
     """Update the status of an infrastructure component."""
 
+    component = component.strip().lower()
+
+    if component not in ALLOWED_COMPONENTS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unknown system component",
+        )
+
     status = payload.get("status")
 
     if status not in {"UP", "DOWN"}:
@@ -527,10 +745,27 @@ async def update_system_component(
             detail="status must be UP or DOWN",
         )
 
+    message = payload.get("message")
+
+    if message is not None:
+        if not isinstance(message, str):
+            raise HTTPException(
+                status_code=400,
+                detail="message must be a string",
+            )
+
+        message = message.strip()
+
+        if len(message) > 500:
+            raise HTTPException(
+                status_code=400,
+                detail="message must not exceed 500 characters",
+            )
+
     alert = system_alert_engine.update_component(
         component=component,
         status=status,
-        message=payload.get("message"),
+        message=message,
     )
 
     if alert is not None:
@@ -586,6 +821,31 @@ async def update_system_component(
         "component": component,
         "alert": alert.to_dict() if alert is not None else None,
     }
+
+
+
+@app.get("/observability/live")
+def get_live_observability():
+    """Return the latest rolling live streaming metrics."""
+
+    metrics = live_aggregator.get_metrics()
+
+    return {
+        "status": metrics.status,
+        "total_events": metrics.total_events,
+        "valid_events": metrics.valid_events,
+        "invalid_events": metrics.invalid_events,
+        "throughput_eps": metrics.throughput_eps,
+        "average_latency_ms": metrics.average_latency_ms,
+        "dlq_rate": metrics.dlq_rate,
+        "quality_percentage": metrics.quality_percentage,
+        "last_event_time": (
+            metrics.last_event_time.isoformat()
+            if metrics.last_event_time
+            else None
+        ),
+    }
+
 # --------------------------------------------------
 # Unified observability overview
 # --------------------------------------------------
@@ -608,23 +868,17 @@ def get_observability_overview():
     components = system.get("components", {})
 
     component_statuses = [
-        component.get("status")
-        for component in components.values()
-        if isinstance(component, dict)
+        status
+        for status in components.values()
+        if isinstance(status, str)
     ]
 
         # Kafka DOWN is considered CRITICAL because Kafka is
     # the primary event-ingestion dependency.
-    kafka_component = components.get("kafka", {})
-
-    if (
-        isinstance(kafka_component, dict)
-        and kafka_component.get("status") == "DOWN"
-    ):
+    if components.get("kafka") == "DOWN":
         statuses.append("CRITICAL")
-    else:
 
-        overall_status = calculate_overall_status(statuses)
+    overall_status = calculate_overall_status(statuses)
 
     return {
         "quality": {
@@ -650,6 +904,7 @@ def get_observability_overview():
             "status": pipeline["status"],
         },
         "system": system,
+        "recovery": recovery_metrics.get_metrics(),
         "overall_status": overall_status,
     }
 # --------------------------------------------------
@@ -761,6 +1016,15 @@ async def process_event(event: dict):
 
     pipeline_latencies_ms.append(
         round(pipeline_latency_ms, 2)
+    )
+        # --------------------------------------------------
+    # Update live streaming metrics
+    # --------------------------------------------------
+
+    live_aggregator.record_event(
+        valid=result["valid"],
+        latency_ms=pipeline_latency_ms,
+        event_time=datetime.now(timezone.utc),
     )
 
     pipeline_elapsed_seconds = (
@@ -1003,7 +1267,7 @@ async def process_event(event: dict):
 
         await alert_manager.broadcast(
             alert_data
-        ) 
+        )
          # --------------------------------------------------
     # Build pipeline performance metrics
     # --------------------------------------------------
@@ -1018,6 +1282,22 @@ async def process_event(event: dict):
 
     pipeline_data = pipeline_metrics_to_dict(
         pipeline_metrics
+    )
+        # --------------------------------------------------
+    # Store performance snapshot
+    # --------------------------------------------------
+
+    performance_snapshot = build_performance_snapshot(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        events_received=metrics["total_events"],
+        events_processed=metrics["total_events"],
+        latencies_ms=pipeline_latencies_ms,
+        elapsed_seconds=pipeline_elapsed_seconds,
+        dlq_events=metrics["invalid_events"],
+    )
+
+    performance_history.add_snapshot(
+        performance_snapshot
     )
 
     current_pipeline_status = pipeline_data["status"]
@@ -1135,20 +1415,72 @@ async def process_event(event: dict):
             # Preserve the existing pipeline WebSocket event.
             await alert_manager.broadcast(
                 pipeline_transition
-            )    
-            
+            )
+
     # --------------------------------------------------
     # Broadcast unified observability overview
     # --------------------------------------------------
 
     overview = get_observability_overview()
 
+    # --------------------------------------------------
+    # Broadcast throttled live metrics
+    # --------------------------------------------------
+
+    global last_live_metrics_broadcast
+
+    current_time = time.monotonic()
+
+    if (
+        current_time - last_live_metrics_broadcast
+        >= LIVE_METRICS_INTERVAL_SECONDS
+    ):
+        live_metrics = live_aggregator.get_metrics()
+
+        live_metrics_message = {
+            "type": "LIVE_METRICS",
+            "timestamp": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "data": {
+                "total_events": live_metrics.total_events,
+                "valid_events": live_metrics.valid_events,
+                "invalid_events": live_metrics.invalid_events,
+                "throughput_eps": live_metrics.throughput_eps,
+                "average_latency_ms": (
+                    live_metrics.average_latency_ms
+                ),
+                "dlq_rate": live_metrics.dlq_rate,
+                "quality_percentage": (
+                    live_metrics.quality_percentage
+                ),
+                "stream_status": live_metrics.status,
+            },
+        }
+
+        await alert_manager.broadcast(
+            live_metrics_message
+        )
+
+        # Record the actual aggregated WebSocket update.
+        live_aggregator.record_websocket_update(
+            update_time=current_time
+        )
+
+        last_live_metrics_broadcast = current_time
+
+    # --------------------------------------------------
+    # Broadcast observability overview
+    # --------------------------------------------------
+
     overview_message = {
         "type": "OBSERVABILITY_OVERVIEW",
         "overall_status": overview["overall_status"],
         "quality_score": overview["quality"]["quality_score"],
         "throughput_eps": overview["pipeline"]["throughput_eps"],
-        "average_latency_ms": overview["pipeline"]["average_latency_ms"],
+        "average_latency_ms": (
+            overview["pipeline"]["average_latency_ms"]
+        ),
         "dlq_rate": overview["pipeline"]["dlq_rate"],
         "is_anomaly": overview["anomaly"]["is_anomaly"],
     }
@@ -1156,7 +1488,8 @@ async def process_event(event: dict):
     await alert_manager.broadcast(
         overview_message
     )
-        # --------------------------------------------------
+
+    # --------------------------------------------------
     # Broadcast observability insights
     # --------------------------------------------------
 
@@ -1169,31 +1502,46 @@ async def process_event(event: dict):
                 "insight": insight,
             }
         )
+
     # --------------------------------------------------
-    # Return event result
+    # Return event validation result
+    # --------------------------------------------------
     # --------------------------------------------------
 
     return {
-        **result,
+        "valid": result["valid"],
+        "errors": result["errors"],
         "status": status,
     }
 # --------------------------------------------------
-# WebSocket alerts
+# WebSocket endpoint
 # --------------------------------------------------
 
 @app.websocket("/ws/alerts")
-async def websocket_alerts(websocket: WebSocket):
-    """Maintain a WebSocket connection for real-time alerts."""
+async def websocket_endpoint(websocket: WebSocket):
+    """Maintain a live WebSocket connection for alerts."""
+
+    origin = websocket.headers.get("origin")
+
+    if origin and origin not in CORS_ORIGINS:
+        await websocket.close(code=1008)
+        return
 
     await alert_manager.connect(websocket)
 
     try:
         while True:
             await websocket.receive_text()
+
     except WebSocketDisconnect:
         alert_manager.disconnect(websocket)
 
+    try:
+        while True:
+            await websocket.receive_text()
 
+    except WebSocketDisconnect:
+        alert_manager.disconnect(websocket)
 
-
-
+    except Exception:
+        alert_manager.disconnect(websocket)
